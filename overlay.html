@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Now Playing</title>
+<style>
+  /* ===================================================================
+     NOW PLAYING - Apple-style overlay
+     OBS等のブラウザソースで使用。背景は透過。
+     曲が変わると、アートワーク/環境光/テキストがクロスフェードします。
+     =================================================================== */
+
+  :root {
+    --text-1: rgba(255,255,255,0.98);
+    --text-2: rgba(255,255,255,0.62);
+    --text-3: rgba(255,255,255,0.46);
+    --hairline: rgba(255,255,255,0.12);
+    --track: rgba(255,255,255,0.16);
+    --fill: rgba(255,255,255,0.95);
+    --radius-card: 28px;
+    --radius-art: 16px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: fit-content;
+    height: fit-content;
+    min-width: 0;
+    min-height: 0;
+    background: rgba(0,0,0,0) !important;
+    font-family: -apple-system, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: visible;
+  }
+
+  body {
+    display: block;
+    padding: 72px 88px;
+  }
+
+  .card-shell {
+    position: relative;
+    width: 720px;
+    border-radius: var(--radius-card);
+    filter:
+      drop-shadow(0 30px 38px rgba(0,0,0,0.42))
+      drop-shadow(0 12px 18px rgba(0,0,0,0.26));
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+    animation: rise 0.7s cubic-bezier(0.22,0.61,0.36,1) forwards;
+  }
+
+  .card {
+    position: relative;
+    z-index: 0;
+    isolation: isolate;
+    width: 720px;
+    max-width: 720px;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 22px;
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    background: rgba(22,22,24,0.66);
+    /* Keep backdrop-filter off; OBS CEF can rasterize it over alpha as a black rectangle. */
+    border: 0.5px solid var(--hairline);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+  }
+
+  .ambient {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    border-radius: inherit;
+    filter: blur(48px) saturate(160%);
+    opacity: 0;
+    transform: scale(1.45);
+    z-index: 0;
+    pointer-events: none;
+    transition: opacity 0.85s ease;
+  }
+
+  .ambient.active { opacity: 0.55; }
+
+  .card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, rgba(0,0,0,0.30), rgba(0,0,0,0.62));
+    z-index: 1;
+  }
+
+  .art {
+    position: relative;
+    z-index: 2;
+    flex-shrink: 0;
+    width: 104px;
+    height: 104px;
+    border-radius: var(--radius-art);
+    overflow: hidden;
+    background: rgba(255,255,255,0.06);
+    box-shadow: 0 12px 28px -6px rgba(0,0,0,0.55);
+  }
+
+  .art::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.14);
+    pointer-events: none;
+  }
+
+  .art-img {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    opacity: 0;
+    transform: scale(1.08);
+    transition:
+      opacity 0.6s ease,
+      transform 0.6s cubic-bezier(0.22,0.61,0.36,1);
+  }
+
+  .art-img.active {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .info {
+    position: relative;
+    z-index: 2;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 7px;
+  }
+
+  .label span {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  .eq {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 11px;
+  }
+
+  .eq i {
+    width: 2.5px;
+    background: rgba(255,255,255,0.72);
+    border-radius: 1px;
+    animation: eq 0.9s ease-in-out infinite;
+  }
+
+  .eq i:nth-child(1) { height: 40%; animation-delay: -0.6s; }
+  .eq i:nth-child(2) { height: 90%; animation-delay: -0.3s; }
+  .eq i:nth-child(3) { height: 60%; animation-delay: -0.9s; }
+  .eq i:nth-child(4) { height: 75%; animation-delay: 0s; }
+
+  .title {
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 1.16;
+    letter-spacing: -0.022em;
+    color: var(--text-1);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .meta {
+    margin-top: 4px;
+    font-size: 15.5px;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .title.swap-out,
+  .meta.swap-out {
+    animation: swapOut 0.30s ease forwards;
+  }
+
+  .title.swap-in,
+  .meta.swap-in {
+    animation: swapIn 0.46s cubic-bezier(0.22,0.61,0.36,1) forwards;
+  }
+
+  .meta.swap-out { animation-delay: 0.04s; }
+  .meta.swap-in { animation-delay: 0.07s; }
+
+  .progress {
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .time {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    min-width: 34px;
+  }
+
+  .time.end { text-align: right; }
+
+  .bar {
+    position: relative;
+    flex: 1;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--track);
+  }
+
+  .bar .filled {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 13.5%;
+    background: var(--fill);
+    border-radius: 3px;
+    transition: width 0.25s linear;
+  }
+
+  .bar .knob {
+    position: absolute;
+    top: 50%;
+    left: 13.5%;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #fff;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+    transition: left 0.25s linear;
+  }
+
+  @keyframes rise {
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes eq {
+    0%, 100% { transform: scaleY(0.35); }
+    50%      { transform: scaleY(1); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes swapOut {
+    to { opacity: 0; transform: translateY(-9px); filter: blur(2px); }
+  }
+
+  @keyframes swapIn {
+    from { opacity: 0; transform: translateY(13px); filter: blur(3px); }
+    to   { opacity: 1; transform: translateY(0); filter: blur(0); }
+  }
+
+  .intro .art      { animation: fadeIn 0.7s ease 0.12s both; }
+  .intro .label    { animation: fadeIn 0.6s ease 0.18s both; }
+  .intro .title    { animation: fadeIn 0.6s ease 0.26s both; }
+  .intro .meta     { animation: fadeIn 0.6s ease 0.32s both; }
+  .intro .progress { animation: fadeIn 0.6s ease 0.38s both; }
+</style>
+</head>
+<body>
+
+  <div class="card-shell">
+    <div class="card intro" id="card">
+      <div class="ambient" id="amb0"></div>
+      <div class="ambient" id="amb1"></div>
+
+      <div class="art" id="art">
+        <div class="art-img" id="art0"></div>
+        <div class="art-img" id="art1"></div>
+      </div>
+      <div class="info">
+        <div class="label">
+          <div class="eq" id="eq"><i></i><i></i><i></i><i></i></div>
+          <span id="stateLabel">Now Playing</span>
+        </div>
+        <div class="title" id="title">Everything In Its Right Place</div>
+        <div class="meta" id="meta">Radiohead · Kid A</div>
+        <div class="progress">
+          <div class="time" id="cur">0:34</div>
+          <div class="bar">
+            <div class="filled" id="filled"></div>
+            <div class="knob" id="knob"></div>
+          </div>
+          <div class="time end" id="dur">4:11</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const NowPlaying = (() => {
+  const $ = id => document.getElementById(id);
+  const fallbackArt = "data:image/svg+xml," + encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#272a31"/>
+      <stop offset="1" stop-color="#101116"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="600" fill="url(#g)"/>
+  <text x="300" y="336" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="120" fill="rgba(255,255,255,0.78)">♪</text>
+</svg>`);
+
+  const fmt = s => {
+    s = Math.max(0, Math.floor(Number(s) || 0));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  };
+
+  const cssUrl = url => `url(${JSON.stringify(url)})`;
+  const normalizeArt = art => art || fallbackArt;
+
+  const card = $("card");
+  const title = $("title");
+  const meta = $("meta");
+  const filled = $("filled");
+  const knob = $("knob");
+  const artLayers = [$("art0"), $("art1")];
+  const ambientLayers = [$("amb0"), $("amb1")];
+  const artRef = { i: 0 };
+  const ambientRef = { i: 0 };
+
+  let currentKey = null;
+  let currentArt = "";
+  let swapTimer = null;
+  let cleanupTimer = null;
+
+  function setLayer(layers, idxRef, art, animate) {
+    const image = cssUrl(normalizeArt(art));
+    const current = idxRef.i;
+
+    if (!animate) {
+      layers[current].style.backgroundImage = image;
+      layers.forEach((layer, index) => {
+        layer.classList.toggle("active", index === current);
+      });
+      return;
+    }
+
+    const next = 1 - current;
+    layers[next].style.backgroundImage = image;
+    layers[next].classList.add("active");
+    layers[current].classList.remove("active");
+    idxRef.i = next;
+  }
+
+  function moveProgress(current, duration) {
+    if (current == null && duration == null) return;
+
+    const safeCurrent = Math.max(0, Number(current) || 0);
+    const safeDuration = Math.max(0, Number(duration) || 0);
+    const pct = safeDuration > 0
+      ? Math.max(0, Math.min(100, (safeCurrent / safeDuration) * 100))
+      : 0;
+
+    filled.style.width = pct + "%";
+    knob.style.left = pct + "%";
+    $("cur").textContent = fmt(safeCurrent);
+    $("dur").textContent = fmt(safeDuration);
+  }
+
+  function snapProgress(current, duration) {
+    [filled, knob].forEach(el => {
+      el.style.transition = "none";
+    });
+    moveProgress(current ?? 0, duration ?? 0);
+    void filled.offsetWidth;
+    [filled, knob].forEach(el => {
+      el.style.transition = "";
+    });
+  }
+
+  function metaText(d) {
+    if (d.artist == null && d.album == null) return meta.textContent;
+    return [d.artist, d.album].filter(Boolean).join(" · ");
+  }
+
+  function trackKey(d) {
+    return d.key || [d.title, d.artist, d.album, d.duration].map(value => value ?? "").join("|");
+  }
+
+  function setArt(art, animate) {
+    const nextArt = normalizeArt(art);
+    setLayer(artLayers, artRef, nextArt, animate);
+    setLayer(ambientLayers, ambientRef, nextArt, animate);
+    currentArt = nextArt;
+  }
+
+  function setDirect(d) {
+    if (d.title != null) title.textContent = d.title;
+    meta.textContent = metaText(d);
+    if (d.art != null) setArt(d.art, false);
+    snapProgress(d.current, d.duration);
+  }
+
+  function changeTrack(d) {
+    clearTimeout(swapTimer);
+    clearTimeout(cleanupTimer);
+    card.classList.remove("intro");
+
+    if (d.art != null) setArt(d.art, true);
+
+    title.classList.remove("swap-in", "swap-out");
+    meta.classList.remove("swap-in", "swap-out");
+    void title.offsetWidth;
+    title.classList.add("swap-out");
+    meta.classList.add("swap-out");
+
+    const nextMeta = metaText(d);
+    swapTimer = setTimeout(() => {
+      if (d.title != null) title.textContent = d.title;
+      meta.textContent = nextMeta;
+      snapProgress(d.current, d.duration);
+
+      title.classList.remove("swap-out");
+      meta.classList.remove("swap-out");
+      title.classList.add("swap-in");
+      meta.classList.add("swap-in");
+
+      cleanupTimer = setTimeout(() => {
+        title.classList.remove("swap-in");
+        meta.classList.remove("swap-in");
+      }, 560);
+    }, 330);
+  }
+
+  return {
+    update(d = {}) {
+      const hasTrackInfo =
+        d.key != null ||
+        d.title != null ||
+        d.artist != null ||
+        d.album != null ||
+        d.art != null;
+
+      if (!hasTrackInfo) {
+        moveProgress(d.current, d.duration);
+        return;
+      }
+
+      const key = trackKey(d);
+      if (currentKey === null) {
+        setDirect(d);
+        currentKey = key;
+        return;
+      }
+
+      if (key !== currentKey) {
+        changeTrack(d);
+        currentKey = key;
+        return;
+      }
+
+      if (d.art != null && normalizeArt(d.art) !== currentArt) {
+        setArt(d.art, true);
+      }
+      moveProgress(d.current, d.duration);
+    }
+  };
+})();
+
+setTimeout(() => document.getElementById("card").classList.remove("intro"), 1500);
+
+function artworkUrl(file, version) {
+  if (!file) return "";
+  return "/runtime/" + file + "?v=" + encodeURIComponent(version || "");
+}
+
+function isPlayableData(data) {
+  return Boolean(data && data.title && data.state !== "stopped" && data.state !== "error");
+}
+
+async function updateFromRuntime() {
+  try {
+    const res = await fetch("/runtime/nowplaying.json?ts=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    if (!isPlayableData(data)) {
+      return;
+    }
+
+    NowPlaying.update({
+      key: data.artworkVersion || [data.title, data.artist, data.album, data.duration].join("|"),
+      title: data.title,
+      artist: data.artist,
+      album: data.album,
+      art: artworkUrl(data.artworkFile, data.artworkVersion),
+      current: data.position,
+      duration: data.duration,
+      state: data.state,
+    });
+  } catch (error) {
+    // Keep the last visible frame if polling fails briefly.
+  }
+}
+
+updateFromRuntime();
+setInterval(updateFromRuntime, 1000);
+</script>
+</body>
+</html>
