@@ -39,7 +39,7 @@ NOWPLAYING_SCRIPT = r'''
   function seconds(read) {
     try {
       const value = Number(read());
-      return Number.isFinite(value) ? Math.trunc(value) : 0;
+      return Number.isFinite(value) ? value : 0;
     } catch (error) {
       return 0;
     }
@@ -217,16 +217,16 @@ def atomic_write_bytes(path: pathlib.Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def fmt_time(seconds: int) -> str:
+def fmt_time(seconds: float) -> str:
     seconds = max(0, int(seconds))
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def safe_int(value: str) -> int:
+def safe_float(value: str) -> float:
     try:
-        return int(float(value or 0))
+        return float(value or 0)
     except ValueError:
-        return 0
+        return 0.0
 
 
 def clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
@@ -253,7 +253,7 @@ def default_payload(state: str = "stopped", error: str = "") -> dict:
     }
 
 
-def build_payload(state: str, title: str, artist: str, album: str, position: int, duration: int) -> dict:
+def build_payload(state: str, title: str, artist: str, album: str, position: float, duration: float) -> dict:
     progress = position / duration if duration > 0 else 0
     return {
         "state": state,
@@ -299,8 +299,8 @@ def get_nowplaying() -> dict:
         str(payload.get("title") or ""),
         str(payload.get("artist") or ""),
         str(payload.get("album") or ""),
-        safe_int(str(payload.get("position") or 0)),
-        safe_int(str(payload.get("duration") or 0)),
+        safe_float(str(payload.get("position") or 0)),
+        safe_float(str(payload.get("duration") or 0)),
     )
 
 
@@ -449,8 +449,8 @@ def write_outputs(data: dict) -> None:
 
 
 def demo_payload(start_time: float) -> dict:
-    elapsed = int(time.time() - start_time)
-    track_index = (elapsed // 28) % len(DEMO_TRACKS)
+    elapsed = time.time() - start_time
+    track_index = int(elapsed // 28) % len(DEMO_TRACKS)
     track = DEMO_TRACKS[track_index]
     duration = track["duration"]
     position = elapsed % min(28, duration)
@@ -541,7 +541,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apple Music now-playing overlay for OBS on macOS.")
     parser.add_argument("--port", type=int, default=8765, help="HTTP server port. Default: 8765")
     parser.add_argument("--bind", default="127.0.0.1", help="HTTP server bind address. Default: 127.0.0.1")
-    parser.add_argument("--interval", type=float, default=1.0, help="Polling interval in seconds. Default: 1.0")
+    parser.add_argument("--interval", type=float, default=0.25, help="Polling interval in seconds. Default: 0.25")
     parser.add_argument("--country", default="JP", help="iTunes Search API country code. Default: JP")
     parser.add_argument("--no-network-artwork", action="store_true", help="Disable iTunes Search API artwork fallback.")
     parser.add_argument("--demo", action="store_true", help="Run with sample data for layout preview.")

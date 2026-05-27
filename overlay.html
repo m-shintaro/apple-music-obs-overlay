@@ -268,19 +268,6 @@
     transition: width 0.25s linear;
   }
 
-  .bar .knob {
-    position: absolute;
-    top: 50%;
-    left: 13.5%;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: #fff;
-    transform: translate(-50%, -50%);
-    box-shadow: 0 1px 5px rgba(0,0,0,0.45);
-    transition: left 0.25s linear;
-  }
-
   @keyframes rise {
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
@@ -333,7 +320,6 @@
           <div class="time" id="cur">0:34</div>
           <div class="bar">
             <div class="filled" id="filled"></div>
-            <div class="knob" id="knob"></div>
           </div>
           <div class="time end" id="dur">4:11</div>
         </div>
@@ -368,7 +354,6 @@ const NowPlaying = (() => {
   const title = $("title");
   const meta = $("meta");
   const filled = $("filled");
-  const knob = $("knob");
   const artLayers = [$("art0"), $("art1")];
   const ambientLayers = [$("amb0"), $("amb1")];
   const artRef = { i: 0 };
@@ -408,20 +393,15 @@ const NowPlaying = (() => {
       : 0;
 
     filled.style.width = pct + "%";
-    knob.style.left = pct + "%";
     $("cur").textContent = fmt(safeCurrent);
     $("dur").textContent = fmt(safeDuration);
   }
 
   function snapProgress(current, duration) {
-    [filled, knob].forEach(el => {
-      el.style.transition = "none";
-    });
+    filled.style.transition = "none";
     moveProgress(current ?? 0, duration ?? 0);
     void filled.offsetWidth;
-    [filled, knob].forEach(el => {
-      el.style.transition = "";
-    });
+    filled.style.transition = "";
   }
 
   function metaText(d) {
@@ -550,7 +530,7 @@ async function updateFromRuntime() {
 }
 
 updateFromRuntime();
-setInterval(updateFromRuntime, 1000);
+setInterval(updateFromRuntime, 250);
 </script>
 </body>
 </html>
