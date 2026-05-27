@@ -5,6 +5,7 @@
 A lightweight, transparent OBS overlay that shows the track currently playing in
 **macOS Music / Apple Music** — complete with album artwork and a live progress bar.
 
+![Release](https://img.shields.io/github/v/release/m-shintaro/apple-music-obs-overlay)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![OBS](https://img.shields.io/badge/OBS-Browser%20Source-302E31)
