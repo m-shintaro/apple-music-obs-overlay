@@ -4,6 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Now Playing</title>
+<script>
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  const profile = String(params.get("profile") || params.get("resolution") || "").toLowerCase();
+  const requestedScale = Number(params.get("scale"));
+  let scale = ["4k", "2160p", "uhd"].includes(profile) ? 2 : 1;
+
+  if (Number.isFinite(requestedScale) && requestedScale > 0) {
+    scale = Math.min(3, Math.max(0.5, requestedScale));
+  }
+
+  document.documentElement.style.setProperty("--overlay-scale", String(scale));
+})();
+</script>
 <style>
   /* ===================================================================
      NOW PLAYING - Apple-style overlay
@@ -12,6 +26,7 @@
      =================================================================== */
 
   :root {
+    --overlay-scale: 1;
     --text-1: rgba(255,255,255,0.98);
     --text-2: rgba(255,255,255,0.62);
     --text-3: rgba(255,255,255,0.46);
@@ -38,6 +53,14 @@
   body {
     display: block;
     padding: 72px 88px;
+    zoom: var(--overlay-scale);
+  }
+
+  @supports not (zoom: 1) {
+    body {
+      transform: scale(var(--overlay-scale));
+      transform-origin: top left;
+    }
   }
 
   .card-shell {

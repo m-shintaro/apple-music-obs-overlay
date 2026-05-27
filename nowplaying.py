@@ -531,7 +531,8 @@ class OverlayHandler(SimpleHTTPRequestHandler):
 
 def serve(port: int, bind: str) -> None:
     server = ThreadingHTTPServer((bind, port), OverlayHandler)
-    print(f"OBS Browser Source URL: http://localhost:{port}/overlay.html", flush=True)
+    print(f"OBS Browser Source URL (1080p): http://localhost:{port}/overlay.html", flush=True)
+    print(f"OBS Browser Source URL (4K): http://localhost:{port}/overlay.html?profile=4k", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     server.serve_forever()
 

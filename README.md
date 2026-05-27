@@ -18,6 +18,16 @@ http://localhost:8765/overlay.html
 
 このサイズは、カード本体 `720px` と浮き上がり用の余白を含みます。
 
+## 4K 配信用
+
+1080p 用のURLはそのまま残し、4K配信ではURLに `?profile=4k` を付けます。
+
+```text
+http://localhost:8765/overlay.html?profile=4k
+```
+
+4K用の推奨サイズは `1792 x 600` 以上です。見た目を微調整したい場合は `?scale=1.75` のように任意の倍率も指定できます。
+
 ## 初回の macOS 権限
 
 初回実行時に、Terminal または Python が Music.app を制御する許可を求められることがあります。許可しなかった場合は、macOS の **System Settings → Privacy & Security → Automation** で Terminal / Python から Music を制御できるようにしてください。
