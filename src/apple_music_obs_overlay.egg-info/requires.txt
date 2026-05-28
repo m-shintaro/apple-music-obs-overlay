@@ -1,0 +1,5 @@
+
+[windows]
+
+[windows:platform_system == "Windows"]
+winsdk>=1.0.0b10

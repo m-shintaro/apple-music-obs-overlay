@@ -1,0 +1,2 @@
+[console_scripts]
+apple-music-obs-overlay = apple_music_obs_overlay.cli:main

@@ -45,7 +45,15 @@
     min-width: 0;
     min-height: 0;
     background: rgba(0,0,0,0) !important;
-    font-family: -apple-system, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+    font-family:
+      -apple-system,
+      BlinkMacSystemFont,
+      "SF Pro Display",
+      "SF Pro Text",
+      "Segoe UI Variable",
+      "Segoe UI",
+      system-ui,
+      sans-serif;
     -webkit-font-smoothing: antialiased;
     overflow: visible;
   }
@@ -80,6 +88,7 @@
     z-index: 0;
     isolation: isolate;
     width: 720px;
+    height: 162px;
     max-width: 720px;
     display: flex;
     align-items: center;
@@ -173,6 +182,7 @@
   .label span {
     font-size: 11px;
     font-weight: 600;
+    line-height: 13px;
     letter-spacing: 0.13em;
     text-transform: uppercase;
     color: var(--text-3);
@@ -200,7 +210,9 @@
   .title {
     font-size: 32px;
     font-weight: 600;
-    line-height: 1.16;
+    height: 40px;
+    margin-bottom: -2px;
+    line-height: 38px;
     letter-spacing: -0.022em;
     color: var(--text-1);
     white-space: nowrap;
@@ -212,6 +224,8 @@
     margin-top: 4px;
     font-size: 15.5px;
     font-weight: 500;
+    height: 20px;
+    line-height: 20px;
     letter-spacing: -0.005em;
     color: var(--text-2);
     white-space: nowrap;
@@ -237,11 +251,13 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    height: 20px;
   }
 
   .time {
     font-size: 12.5px;
     font-weight: 500;
+    line-height: 20px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
@@ -360,6 +376,14 @@ const NowPlaying = (() => {
 
   let currentKey = null;
   let currentArt = "";
+  let artLoadToken = 0;
+  const loadedArtUrls = new Set([fallbackArt]);
+  let progressState = "stopped";
+  let progressBaseCurrent = 0;
+  let progressDuration = 0;
+  let progressBaseAt = performance.now();
+  let progressFrame = null;
+  let lastProgressInput = null;
   let swapTimer = null;
   let cleanupTimer = null;
 
@@ -382,25 +406,136 @@ const NowPlaying = (() => {
     idxRef.i = next;
   }
 
-  function moveProgress(current, duration) {
-    if (current == null && duration == null) return;
+  function preloadArt(art) {
+    const normalizedArt = normalizeArt(art);
+    if (loadedArtUrls.has(normalizedArt)) {
+      return Promise.resolve(normalizedArt);
+    }
 
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        loadedArtUrls.add(normalizedArt);
+        resolve(normalizedArt);
+      };
+      img.onerror = () => resolve("");
+      img.src = normalizedArt;
+    });
+  }
+
+  function artResourceKey(art) {
+    const normalizedArt = normalizeArt(art);
+
+    try {
+      const url = new URL(normalizedArt, window.location.href);
+      if (url.pathname.startsWith("/runtime/")) {
+        return url.origin + url.pathname;
+      }
+    } catch (error) {
+      // Keep the raw value for non-URL artwork sources such as data URLs.
+    }
+
+    return normalizedArt;
+  }
+
+  function isSameArtResource(nextArt, activeArt) {
+    return artResourceKey(nextArt) === artResourceKey(activeArt);
+  }
+
+  function commitArt(art, animate) {
+    setLayer(artLayers, artRef, art, animate);
+    setLayer(ambientLayers, ambientRef, art, animate);
+    currentArt = art;
+  }
+
+  function currentProgressTime(now = performance.now()) {
+    const elapsed = progressState === "playing" ? (now - progressBaseAt) / 1000 : 0;
+    const current = Math.max(0, progressBaseCurrent + elapsed);
+    return progressDuration > 0 ? Math.min(current, progressDuration) : current;
+  }
+
+  function renderProgress(current, duration) {
     const safeCurrent = Math.max(0, Number(current) || 0);
     const safeDuration = Math.max(0, Number(duration) || 0);
+    const displayCurrent = safeDuration > 0 ? Math.min(safeCurrent, safeDuration) : safeCurrent;
     const pct = safeDuration > 0
-      ? Math.max(0, Math.min(100, (safeCurrent / safeDuration) * 100))
+      ? Math.max(0, Math.min(100, (displayCurrent / safeDuration) * 100))
       : 0;
 
     filled.style.width = pct + "%";
-    $("cur").textContent = fmt(safeCurrent);
+    $("cur").textContent = fmt(displayCurrent);
     $("dur").textContent = fmt(safeDuration);
   }
 
-  function snapProgress(current, duration) {
+  function stopProgressClock() {
+    if (progressFrame != null) {
+      cancelAnimationFrame(progressFrame);
+      progressFrame = null;
+    }
+  }
+
+  function tickProgress() {
+    progressFrame = null;
+    renderProgress(currentProgressTime(), progressDuration);
+
+    if (progressState === "playing" && (progressDuration <= 0 || currentProgressTime() < progressDuration)) {
+      progressFrame = requestAnimationFrame(tickProgress);
+    }
+  }
+
+  function syncProgress(current, duration, state, options = {}) {
+    if (current == null && duration == null && state == null) return;
+
+    const now = performance.now();
+    const nextState = state || progressState;
+    const nextDuration = duration == null ? progressDuration : Math.max(0, Number(duration) || 0);
+    const hasIncomingCurrent = current != null;
+    const incomingCurrent = hasIncomingCurrent
+      ? Math.max(0, Number(current) || 0)
+      : currentProgressTime(now);
+    const repeatedPosition =
+      hasIncomingCurrent &&
+      lastProgressInput &&
+      Math.abs(incomingCurrent - lastProgressInput.current) < 0.05 &&
+      nextState === lastProgressInput.state;
+    const keepLocalClock =
+      !options.force &&
+      progressState === "playing" &&
+      nextState === "playing" &&
+      repeatedPosition;
+    const nextCurrent = keepLocalClock ? currentProgressTime(now) : incomingCurrent;
+
+    progressState = nextState;
+    progressDuration = nextDuration;
+    progressBaseCurrent = nextDuration > 0 ? Math.min(nextCurrent, nextDuration) : nextCurrent;
+    progressBaseAt = now;
+
+    if (hasIncomingCurrent) {
+      lastProgressInput = {
+        current: incomingCurrent,
+        duration: nextDuration,
+        state: nextState,
+      };
+    }
+
+    if (options.snap) {
+      filled.style.transition = "none";
+    }
+    renderProgress(progressBaseCurrent, progressDuration);
+    if (options.snap) {
+      void filled.offsetWidth;
+      filled.style.transition = "";
+    }
+
+    stopProgressClock();
+    if (progressState === "playing" && (progressDuration <= 0 || progressBaseCurrent < progressDuration)) {
+      progressFrame = requestAnimationFrame(tickProgress);
+    }
+  }
+
+  function snapProgress(current, duration, state) {
     filled.style.transition = "none";
-    moveProgress(current ?? 0, duration ?? 0);
-    void filled.offsetWidth;
-    filled.style.transition = "";
+    syncProgress(current ?? 0, duration ?? 0, state, { snap: true, force: true });
   }
 
   function metaText(d) {
@@ -409,21 +544,30 @@ const NowPlaying = (() => {
   }
 
   function trackKey(d) {
-    return d.key || [d.title, d.artist, d.album, d.duration].map(value => value ?? "").join("|");
+    return d.key || [d.title, d.artist, d.album].map(value => value ?? "").join("|");
   }
 
   function setArt(art, animate) {
     const nextArt = normalizeArt(art);
-    setLayer(artLayers, artRef, nextArt, animate);
-    setLayer(ambientLayers, ambientRef, nextArt, animate);
-    currentArt = nextArt;
+
+    if (nextArt === currentArt) return;
+    if (!currentArt && nextArt !== fallbackArt) {
+      commitArt(fallbackArt, false);
+    }
+
+    const token = ++artLoadToken;
+    preloadArt(nextArt).then(loadedArt => {
+      if (token !== artLoadToken) return;
+      if (!loadedArt || loadedArt === currentArt) return;
+      commitArt(loadedArt, animate);
+    });
   }
 
   function setDirect(d) {
     if (d.title != null) title.textContent = d.title;
     meta.textContent = metaText(d);
     if (d.art != null) setArt(d.art, false);
-    snapProgress(d.current, d.duration);
+    snapProgress(d.current, d.duration, d.state);
   }
 
   function changeTrack(d) {
@@ -443,7 +587,7 @@ const NowPlaying = (() => {
     swapTimer = setTimeout(() => {
       if (d.title != null) title.textContent = d.title;
       meta.textContent = nextMeta;
-      snapProgress(d.current, d.duration);
+      snapProgress(d.current, d.duration, d.state);
 
       title.classList.remove("swap-out");
       meta.classList.remove("swap-out");
@@ -467,7 +611,7 @@ const NowPlaying = (() => {
         d.art != null;
 
       if (!hasTrackInfo) {
-        moveProgress(d.current, d.duration);
+        syncProgress(d.current, d.duration, d.state);
         return;
       }
 
@@ -484,10 +628,10 @@ const NowPlaying = (() => {
         return;
       }
 
-      if (d.art != null && normalizeArt(d.art) !== currentArt) {
-        setArt(d.art, true);
+      if (d.art && !isSameArtResource(d.art, currentArt)) {
+        setArt(d.art, false);
       }
-      moveProgress(d.current, d.duration);
+      syncProgress(d.current, d.duration, d.state);
     }
   };
 })();
@@ -500,7 +644,12 @@ function artworkUrl(file, version) {
 }
 
 function isPlayableData(data) {
-  return Boolean(data && data.title && data.state !== "stopped" && data.state !== "error");
+  return Boolean(
+    data &&
+    data.state !== "stopped" &&
+    data.state !== "error" &&
+    (data.title || data.artist || data.album || data.artworkFile)
+  );
 }
 
 async function updateFromRuntime() {
@@ -510,14 +659,18 @@ async function updateFromRuntime() {
 
     const data = await res.json();
     if (!isPlayableData(data)) {
+      NowPlaying.update({ state: data?.state || "stopped" });
       return;
     }
 
+    const displayTitle = data.title || data.artist || data.album || "Now Playing";
+    const hasTitle = Boolean(data.title);
+
     NowPlaying.update({
-      key: data.artworkVersion || [data.title, data.artist, data.album, data.duration].join("|"),
-      title: data.title,
-      artist: data.artist,
-      album: data.album,
+      key: [displayTitle, data.artist, data.album].join("|"),
+      title: displayTitle,
+      artist: hasTitle ? data.artist : "",
+      album: hasTitle ? data.album : "",
       art: artworkUrl(data.artworkFile, data.artworkVersion),
       current: data.position,
       duration: data.duration,
