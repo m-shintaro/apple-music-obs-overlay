@@ -13,6 +13,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 $VenvDir = Join-Path $RootDir ".venv-build"
 $SpecPath = Join-Path $RootDir "packaging\windows\OBSAppleMusicProgressBar.spec"
+$ReadmePath = Join-Path $RootDir "packaging\windows\README.txt"
 $DistDir = Join-Path $RootDir "dist\OBSAppleMusicProgressBar"
 $BuildDir = Join-Path $RootDir "build"
 
@@ -122,6 +123,8 @@ try {
     if (-not (Test-Path $DistDir)) {
         throw "PyInstaller did not create $DistDir."
     }
+
+    Copy-Item -LiteralPath $ReadmePath -Destination (Join-Path $DistDir "README.txt") -Force
 
     $Version = Get-ProjectVersion
     $Arch = Get-ArchName
