@@ -18,7 +18,37 @@ from .providers.windows_media import WindowsMediaProvider
 from .server import serve
 
 
+def is_frozen_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def frozen_bundle_dir() -> Path | None:
+    if not is_frozen_app():
+        return None
+
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        candidates.append(Path(meipass))
+    candidates.append(Path(sys.executable).resolve().parent)
+
+    for candidate in candidates:
+        if (candidate / "overlay.html").exists():
+            return candidate
+    return None
+
+
+def executable_dir() -> Path:
+    if is_frozen_app():
+        return Path(sys.executable).resolve().parent
+    return Path.cwd()
+
+
 def find_app_dir() -> Path:
+    bundle_dir = frozen_bundle_dir()
+    if bundle_dir is not None:
+        return bundle_dir
+
     repo_dir = Path(__file__).resolve().parents[2]
     if (repo_dir / "overlay.html").exists():
         return repo_dir
@@ -32,9 +62,11 @@ def find_app_dir() -> Path:
 
 
 def find_runtime_dir(app_dir: Path) -> Path:
+    if is_frozen_app():
+        return executable_dir() / "runtime"
     if app_dir == Path.cwd() or app_dir == Path(__file__).resolve().parents[2]:
         return app_dir / "runtime"
-    return Path.cwd() / "runtime"
+    return executable_dir() / "runtime"
 
 
 APP_DIR = find_app_dir()

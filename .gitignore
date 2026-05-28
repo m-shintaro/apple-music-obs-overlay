@@ -2,5 +2,8 @@ runtime/*
 !runtime/.gitkeep
 __pycache__/
 .venv/
+.venv-build/
 .pytest_cache/
+build/
+dist/
 .DS_Store

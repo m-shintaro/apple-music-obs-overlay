@@ -1,5 +1,6 @@
 LICENSE
 README.md
+overlay.html
 pyproject.toml
 src/apple_music_obs_overlay/__init__.py
 src/apple_music_obs_overlay/cli.py
@@ -21,3 +22,7 @@ src/apple_music_obs_overlay/providers/base.py
 src/apple_music_obs_overlay/providers/demo.py
 src/apple_music_obs_overlay/providers/macos_music.py
 src/apple_music_obs_overlay/providers/windows_media.py
+tests/test_cli_paths.py
+tests/test_output.py
+tests/test_poller.py
+tests/test_windows_media.py

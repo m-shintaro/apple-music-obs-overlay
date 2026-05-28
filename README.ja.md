@@ -92,6 +92,26 @@ OBS Browser Source の URL は macOS / Windows 共通です。
 http://localhost:8765/overlay.html
 ```
 
+### Windows ポータブル ZIP
+
+Windows では、Python をインストールせずに使えるポータブル版も利用できます。リリースから
+Windows ZIP をダウンロードして展開し、`OBSAppleMusicProgressBar.exe` をダブルクリックしてください。
+コンソールに OBS Browser Source の URL が表示されます。
+
+```text
+http://localhost:8765/overlay.html
+```
+
+ポータブル版の `runtime/` フォルダは exe と同じ場所に作成されます。
+
+Windows 上でポータブル ZIP をビルドする場合:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+```
+
+ZIP は `dist/OBSAppleMusicProgressBar-<version>-windows-<arch>.zip` に出力されます。
+
 ## Usage
 
 ### 4K と倍率の調整

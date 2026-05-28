@@ -94,6 +94,27 @@ The OBS Browser Source URL is the same on both platforms:
 http://localhost:8765/overlay.html
 ```
 
+### Windows portable ZIP
+
+Windows users can also run a portable build without installing Python. Download
+the Windows ZIP from a release, extract it, and double-click
+`OBSAppleMusicProgressBar.exe`. The console window prints the OBS Browser Source
+URL:
+
+```text
+http://localhost:8765/overlay.html
+```
+
+The portable build writes its `runtime/` folder next to the executable.
+
+To build the portable ZIP locally on Windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+```
+
+The ZIP is written to `dist/OBSAppleMusicProgressBar-<version>-windows-<arch>.zip`.
+
 ## Usage
 
 ### 4K and custom scaling
