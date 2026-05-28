@@ -20,6 +20,10 @@ A lightweight, transparent OBS overlay that shows the track currently playing in
 
 ---
 
+> **Windows users:** no Python required — just grab the portable ZIP from the
+> [**latest release**](https://github.com/m-shintaro/apple-music-obs-overlay/releases/latest)
+> and double-click the executable. See [Windows portable ZIP](#windows-portable-zip-no-python-required).
+
 ## Overview
 
 A small Python backend polls the active provider for the current track — title,
@@ -43,7 +47,7 @@ Windows uses the OS media session API (SMTC) through an optional Python extra.
 ## Requirements
 
 - macOS with Music.app / Apple Music, or Windows 10/11 with Apple Music for Windows
-- Python 3.9 or later
+- Python 3.9 or later _(not needed for the Windows portable ZIP)_
 - OBS Studio
 
 > macOS does not require additional Python packages. Windows support requires
@@ -76,7 +80,10 @@ The area around the card is transparent, so a larger OBS source size is perfectl
 
 ### Windows setup
 
-From the repository directory, install the optional Windows dependency once:
+Prefer not to install Python? Skip to the
+[Windows portable ZIP](#windows-portable-zip-no-python-required) below.
+
+Otherwise, from the repository directory, install the optional Windows dependency once:
 
 ```powershell
 py -3 -m pip install ".[windows]"
@@ -94,18 +101,25 @@ The OBS Browser Source URL is the same on both platforms:
 http://localhost:8765/overlay.html
 ```
 
-### Windows portable ZIP
+### Windows portable ZIP (no Python required)
 
-Windows users can also run a portable build without installing Python. Download
-the Windows ZIP from a release, extract it, and double-click
-`OBSAppleMusicProgressBar.exe`. The console window prints the OBS Browser Source
-URL:
+You don't need to install Python on Windows — download the portable build from the
+latest release:
+
+1. Open the [**Releases** page](https://github.com/m-shintaro/apple-music-obs-overlay/releases/latest).
+2. Under **Assets**, download `OBSAppleMusicProgressBar-<version>-windows-<arch>.zip`.
+3. Extract the ZIP anywhere, then double-click `OBSAppleMusicProgressBar.exe`.
+
+The console window prints the OBS Browser Source URL:
 
 ```text
 http://localhost:8765/overlay.html
 ```
 
 The portable build writes its `runtime/` folder next to the executable.
+
+<details>
+<summary>Building the portable ZIP yourself</summary>
 
 To build the portable ZIP locally on Windows:
 
@@ -114,6 +128,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 ```
 
 The ZIP is written to `dist/OBSAppleMusicProgressBar-<version>-windows-<arch>.zip`.
+
+</details>
 
 ## Usage
 
@@ -147,17 +163,17 @@ python3 nowplaying.py --once
 
 ### Command-line options
 
-| Option                 | Default     | Description                                    |
-| ---------------------- | ----------- | ---------------------------------------------- |
+| Option                 | Default     | Description                                     |
+| ---------------------- | ----------- | ----------------------------------------------- |
 | `--provider`           | `auto`      | Provider: `auto`, `macos`, `windows`, or `demo` |
-| `--port`               | `8765`      | HTTP server port                               |
-| `--bind`               | `127.0.0.1` | HTTP server bind address                       |
-| `--interval`           | `0.25`      | Provider polling interval, in seconds          |
-| `--country`            | `JP`        | iTunes Search API country code                 |
-| `--no-network-artwork` | off         | Disable the iTunes Search API artwork fallback |
-| `--demo`               | off         | Alias for `--provider demo`                    |
-| `--once`               | off         | Write files once and exit                      |
-| `--diagnose-artwork`   | off         | Diagnose provider artwork export               |
+| `--port`               | `8765`      | HTTP server port                                |
+| `--bind`               | `127.0.0.1` | HTTP server bind address                        |
+| `--interval`           | `0.25`      | Provider polling interval, in seconds           |
+| `--country`            | `JP`        | iTunes Search API country code                  |
+| `--no-network-artwork` | off         | Disable the iTunes Search API artwork fallback  |
+| `--demo`               | off         | Alias for `--provider demo`                     |
+| `--once`               | off         | Write files once and exit                       |
+| `--diagnose-artwork`   | off         | Diagnose provider artwork export                |
 
 ## macOS Permissions
 
@@ -217,7 +233,7 @@ The JSON schema is documented in [`docs/nowplaying-json.md`](docs/nowplaying-jso
 - The overlay does not update while playback is stopped.
 - Confirm the Browser Source URL is `http://localhost:8765/overlay.html`.
 - Run `python3 nowplaying.py --demo` to verify the overlay layout.
-- On Windows, confirm `py -3 -m pip install ".[windows]"` has been run and Apple Music exposes a media session.
+- On Windows, confirm `py -3 -m pip install ".[windows]"` has been run (or that you launched the portable EXE) and Apple Music exposes a media session.
 
 </details>
 
