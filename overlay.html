@@ -45,7 +45,15 @@
     min-width: 0;
     min-height: 0;
     background: rgba(0,0,0,0) !important;
-    font-family: -apple-system, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+    font-family:
+      -apple-system,
+      BlinkMacSystemFont,
+      "SF Pro Display",
+      "SF Pro Text",
+      "Segoe UI Variable",
+      "Segoe UI",
+      system-ui,
+      sans-serif;
     -webkit-font-smoothing: antialiased;
     overflow: visible;
   }
@@ -500,7 +508,12 @@ function artworkUrl(file, version) {
 }
 
 function isPlayableData(data) {
-  return Boolean(data && data.title && data.state !== "stopped" && data.state !== "error");
+  return Boolean(
+    data &&
+    data.state !== "stopped" &&
+    data.state !== "error" &&
+    (data.title || data.artist || data.album || data.artworkFile)
+  );
 }
 
 async function updateFromRuntime() {
@@ -513,11 +526,14 @@ async function updateFromRuntime() {
       return;
     }
 
+    const displayTitle = data.title || data.artist || data.album || "Now Playing";
+    const hasTitle = Boolean(data.title);
+
     NowPlaying.update({
-      key: data.artworkVersion || [data.title, data.artist, data.album, data.duration].join("|"),
-      title: data.title,
-      artist: data.artist,
-      album: data.album,
+      key: data.artworkVersion || [displayTitle, data.artist, data.album, data.duration].join("|"),
+      title: displayTitle,
+      artist: hasTitle ? data.artist : "",
+      album: hasTitle ? data.album : "",
       art: artworkUrl(data.artworkFile, data.artworkVersion),
       current: data.position,
       duration: data.duration,

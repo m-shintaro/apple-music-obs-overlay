@@ -11,7 +11,7 @@ from ..payload import build_payload, default_payload
 from .base import ArtworkResult, BaseProvider
 
 
-WINDOWS_EXTRA_HELP = 'install the Windows extra with: python -m pip install ".[windows]"'
+WINDOWS_EXTRA_HELP = 'install the Windows extra with: py -3 -m pip install ".[windows]"'
 MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024
 
 
@@ -96,7 +96,12 @@ class WindowsMediaProvider(BaseProvider):
             position = _timespan_to_seconds(getattr(timeline, "position", 0))
             start = _timespan_to_seconds(getattr(timeline, "start_time", 0))
             end = _timespan_to_seconds(getattr(timeline, "end_time", 0))
-            duration = max(0.0, end - start) if end > start else max(0.0, end)
+            if end > start:
+                position = max(0.0, position - start)
+                duration = max(0.0, end - start)
+            else:
+                position = max(0.0, position)
+                duration = max(0.0, end)
         except Exception as exc:
             errors.append(f"timeline_unavailable:{_error_detail(exc)}")
 
@@ -126,6 +131,8 @@ class WindowsMediaProvider(BaseProvider):
             return b"", "", "windows:thumbnail:unavailable"
 
         api = _load_streams_api()
+        reader = None
+        stream = None
         try:
             stream = await thumbnail.open_read_async()
             size = int(getattr(stream, "size", 0))
@@ -135,7 +142,13 @@ class WindowsMediaProvider(BaseProvider):
                 return b"", "", f"windows:thumbnail:too_large:{size}"
 
             buffer = api["Buffer"](size)
-            await stream.read_async(buffer, size, api["InputStreamOptions"].READ_AHEAD)
+            read_buffer = await stream.read_async(
+                buffer,
+                size,
+                api["InputStreamOptions"].READ_AHEAD,
+            )
+            if read_buffer is not None:
+                buffer = read_buffer
             length = int(getattr(buffer, "length", 0))
             if length <= 0:
                 return b"", "", "windows:thumbnail:empty"
@@ -144,6 +157,9 @@ class WindowsMediaProvider(BaseProvider):
             return _read_buffer_bytes(reader, length), "smtc", ""
         except Exception as exc:
             return b"", "", f"windows:thumbnail:{_error_detail(exc)}"
+        finally:
+            _close_quietly(reader)
+            _close_quietly(stream)
 
     async def _request_manager(self):
         media_manager = _load_media_manager()
@@ -151,25 +167,37 @@ class WindowsMediaProvider(BaseProvider):
 
     def _select_session(self, manager):
         current = manager.get_current_session()
-        if current is not None:
-            return current
+        candidates = []
+        seen = set()
 
-        sessions = _session_list(manager)
-        if not sessions:
+        def add(session, is_current: bool) -> None:
+            if session is None:
+                return
+            marker = id(session)
+            if marker in seen:
+                return
+            seen.add(marker)
+            candidates.append((session, is_current))
+
+        add(current, True)
+        for session in _session_list(manager):
+            add(session, session is current)
+
+        if not candidates:
             return None
 
-        preferred = sorted(
-            sessions,
-            key=lambda session: self._session_score(session),
-            reverse=True,
-        )
-        return preferred[0]
+        return max(
+            candidates,
+            key=lambda item: self._session_score(item[0], item[1]),
+        )[0]
 
-    def _session_score(self, session) -> int:
+    def _session_score(self, session, is_current: bool = False) -> int:
         score = 0
         app_id = str(getattr(session, "source_app_user_model_id", "") or "").lower()
-        if "applemusic" in app_id or "itunes" in app_id:
+        if _is_apple_music_session(app_id):
             score += 100
+        if is_current:
+            score += 30
         state = self._read_playback_state(session)
         if state == "playing":
             score += 20
@@ -234,6 +262,11 @@ def _session_list(manager) -> Iterable[Any]:
         return []
 
 
+def _is_apple_music_session(app_id: str) -> bool:
+    normalized = app_id.lower().replace(" ", "")
+    return "applemusic" in normalized or "itunes" in normalized
+
+
 def _text_attr(obj: object, name: str) -> str:
     value = getattr(obj, name, "")
     if callable(value):
@@ -272,3 +305,16 @@ def _read_buffer_bytes(reader: object, length: int) -> bytes:
 
 def _error_detail(exc: Exception) -> str:
     return (str(exc).strip() or exc.__class__.__name__).replace("\n", " ")
+
+
+def _close_quietly(obj: object) -> None:
+    if obj is None:
+        return
+    for method_name in ("close", "dispose"):
+        method = getattr(obj, method_name, None)
+        if callable(method):
+            try:
+                method()
+            except Exception:
+                pass
+            return

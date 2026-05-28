@@ -6,6 +6,7 @@ from pathlib import Path
 import platform
 import signal
 import sys
+import sysconfig
 import threading
 
 from .output import ensure_runtime_dir, write_outputs
@@ -24,11 +25,20 @@ def find_app_dir() -> Path:
     cwd = Path.cwd()
     if (cwd / "overlay.html").exists():
         return cwd
+    data_dir = Path(sysconfig.get_path("data")) / "share" / "apple-music-obs-overlay"
+    if (data_dir / "overlay.html").exists():
+        return data_dir
     return repo_dir
 
 
+def find_runtime_dir(app_dir: Path) -> Path:
+    if app_dir == Path.cwd() or app_dir == Path(__file__).resolve().parents[2]:
+        return app_dir / "runtime"
+    return Path.cwd() / "runtime"
+
+
 APP_DIR = find_app_dir()
-RUNTIME_DIR = APP_DIR / "runtime"
+RUNTIME_DIR = find_runtime_dir(APP_DIR)
 JSON_FILE = RUNTIME_DIR / "nowplaying.json"
 
 
@@ -154,5 +164,5 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    serve(args.port, args.bind, APP_DIR)
+    serve(args.port, args.bind, APP_DIR, RUNTIME_DIR)
     return 0

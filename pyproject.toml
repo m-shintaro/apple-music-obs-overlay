@@ -20,3 +20,6 @@ apple-music-obs-overlay = "apple_music_obs_overlay.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.data-files]
+"share/apple-music-obs-overlay" = ["overlay.html"]
