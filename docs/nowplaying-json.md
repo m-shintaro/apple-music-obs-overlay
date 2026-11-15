@@ -38,16 +38,17 @@ ignore unknown fields for forward compatibility.
 | `title` | string | Track title, or an empty string when unavailable. |
 | `artist` | string | Track artist, or an empty string when unavailable. |
 | `album` | string | Album title, or an empty string when unavailable. |
-| `trackId` | string | Optional macOS Music persistent track ID. Used to correlate artwork with its track; unavailable IDs are empty. |
-| `sourceAppId` | string | Optional Windows media-session app ID. Prevents adopting a different app's cover for otherwise identical metadata. |
+| `trackId` | string | Optional macOS Music persistent ID or system media content item ID. Used to correlate artwork with its track; unavailable IDs are empty. |
+| `sourceAppId` | string | Optional Windows media-session app ID or macOS bundle identifier. Prevents adopting a different app's cover for otherwise identical metadata. |
 | `position` | number | Current playback position in seconds. |
 | `duration` | number | Track duration in seconds. |
+| `playbackRate` | number | Optional playback speed from macOS system media (e.g. `2` for 2×). The overlay uses `1` when absent; paused playback does not advance. |
 | `positionText` | string | Display-ready `M:SS` text for `position`. |
 | `durationText` | string | Display-ready `M:SS` text for `duration`. |
 | `progress` | number | `position / duration`, clamped from `0` to `1`. |
 | `artworkFile` | string | Artwork filename inside `runtime/`, or empty when unavailable. |
 | `artworkVersion` | string | SHA-256 of the published image bytes, or empty while artwork is unavailable. Changes only when image content changes. |
-| `artworkSource` | string | Artwork source such as `music`, `smtc`, or `itunes`. |
+| `artworkSource` | string | Artwork source such as `music`, `mediaremote`, `smtc`, or `itunes`. |
 | `artworkError` | string | Last artwork retrieval error. Empty when artwork was found or no lookup was attempted. |
 | `artworkPending` | boolean | Artwork lookup is pending. The overlay retains its visible cover while the lookup runs, avoiding placeholder flashes between tracks sharing artwork; after a track change it falls back to the placeholder if the lookup is still pending after 2.5 seconds. Missing means false for compatibility. |
 | `updatedAt` | number | Unix timestamp written by the backend. |
@@ -55,7 +56,9 @@ ignore unknown fields for forward compatibility.
 
 ## Provider Notes
 
-- macOS uses Music.app through `osascript` / JXA and can directly export Music.app artwork.
+- On macOS, `auto` uses `media-control` when installed, otherwise Music.app through `osascript` / JXA. `--provider macos` always selects Music.app; `--provider macos-media` requires the helper.
+- System media follows macOS's active Now Playing app, including YouTube when the browser publishes metadata. One `media-control stream --micros --no-diff --no-artwork` process supplies full metadata snapshots. A monotonic clock advances position from the native timestamp at the reported playback rate; snapshots replace prior state on seek, pause, app switch or stop. Stream errors clear playback instead of retaining stale state. The process is stopped on backend exit.
+- System artwork is read separately with `media-control get --micros`, decoded from base64 and checked against the requested app, track ID and metadata. It uses the existing single-worker publication and cache. Browser and other non-Music app metadata is never sent to the iTunes fallback. `--once` and `--diagnose-artwork` use a one-shot native query to avoid the stream's empty startup event.
 - Windows uses the OS media session API (SMTC) through the optional `winsdk` dependency.
 - Demo mode writes sample playback data and does not attempt artwork lookup.
 - Artwork is fetched asynchronously; metadata may arrive first with empty artwork fields.

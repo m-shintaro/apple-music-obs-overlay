@@ -21,12 +21,27 @@ class NowPlayingProvider(Protocol):
     def get_nowplaying(self) -> Dict[str, Any]:
         ...
 
+    def get_nowplaying_once(self) -> Dict[str, Any]:
+        ...
+
     def get_artwork(self, data: Dict[str, Any], runtime_dir: Path | None = None) -> ArtworkResult:
+        ...
+
+    def close(self) -> None:
         ...
 
 
 class BaseProvider:
     name = "base"
+
+    def get_nowplaying_once(self) -> Dict[str, Any]:
+        return self.get_nowplaying()
+
+    def close(self) -> None:
+        pass
+
+    def allow_itunes_fallback(self, data: Dict[str, Any]) -> bool:
+        return True
 
     def get_artwork(self, data: Dict[str, Any], runtime_dir: Path | None = None) -> ArtworkResult:
         return ArtworkResult()

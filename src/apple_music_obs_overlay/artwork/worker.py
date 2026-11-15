@@ -90,7 +90,9 @@ class ArtworkWorker:
                         result.error = ""
                 except Exception as exc:
                     result.error = f"{self.provider.name}:artwork:{exc}"
-                if not result.image and network and not self.cancel_event.is_set():
+                allow_fallback = getattr(self.provider, "allow_itunes_fallback", lambda data: True)
+                if (not result.image and network and allow_fallback(data) and
+                        not self.cancel_event.is_set()):
                     result.network_attempted = True
                     file, error = fetch_artwork_from_itunes_search(
                         data, scratch, self.country, cancel_event=self.cancel_event)

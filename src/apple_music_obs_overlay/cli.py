@@ -15,6 +15,7 @@ from .poller import poll_loop
 from .providers.base import NowPlayingProvider
 from .providers.demo import DemoProvider
 from .providers.macos_music import MacOSMusicProvider
+from .providers.macos_media import MacOSMediaProvider, find_media_control, INSTALL_HELP
 from .providers.windows_media import WindowsMediaProvider
 from .server import serve
 
@@ -81,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=("auto", "macos", "windows", "demo"),
+        choices=("auto", "macos", "macos-media", "windows", "demo"),
         default="auto",
         help="Now-playing provider. Default: auto",
     )
@@ -120,6 +121,8 @@ def parse_args() -> argparse.Namespace:
 def create_provider(name: str, runtime_dir: Path) -> NowPlayingProvider:
     if name == "macos":
         return MacOSMusicProvider(runtime_dir)
+    if name == "macos-media":
+        return MacOSMediaProvider(runtime_dir)
     if name == "windows":
         return WindowsMediaProvider(runtime_dir)
     if name == "demo":
@@ -135,6 +138,9 @@ def resolve_provider_name(args: argparse.Namespace) -> str:
 
     system = platform.system()
     if system == "Darwin":
+        if find_media_control():
+            return "macos-media"
+        print(f"Using Apple Music only. {INSTALL_HELP}", file=sys.stderr, flush=True)
         return "macos"
     if system == "Windows":
         return "windows"
@@ -152,8 +158,15 @@ def main() -> int:
     ensure_runtime_dir(RUNTIME_DIR)
     provider = create_provider(resolve_provider_name(args), RUNTIME_DIR)
 
+    try:
+        return run_provider(args, provider)
+    finally:
+        provider.close()
+
+
+def run_provider(args: argparse.Namespace, provider: NowPlayingProvider) -> int:
     if args.diagnose_artwork:
-        data = provider.get_nowplaying()
+        data = provider.get_nowplaying_once()
         artwork = provider.get_artwork(data)
         print(
             json.dumps(
@@ -171,7 +184,7 @@ def main() -> int:
         return 0
 
     if args.once:
-        data = provider.get_nowplaying()
+        data = provider.get_nowplaying_once()
         write_outputs(data, RUNTIME_DIR)
         print(JSON_FILE)
         return 0
@@ -183,6 +196,8 @@ def main() -> int:
             file=sys.stderr,
             flush=True,
         )
+
+    print(f"Now-playing provider: {provider.name}", flush=True)
 
     stop_event = threading.Event()
     poller = threading.Thread(

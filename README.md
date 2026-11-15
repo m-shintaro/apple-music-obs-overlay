@@ -32,21 +32,23 @@ artist, album, playback position, duration, and artwork — and writes it to
 file and renders a clean, transparent overlay you can drop straight into an OBS
 **Browser Source**.
 
-macOS uses Music.app through the built-in `osascript` and `sips` commands.
+macOS reads system Now Playing information through the optional `media-control`
+helper, including YouTube in browsers that publish media metadata to macOS.
+Without the helper it uses Music.app through the built-in `osascript` and `sips` commands.
 Windows uses the OS media session API (SMTC) through an optional Python extra.
 
 ## Features
 
-- Live "now playing" display for macOS Music / Apple Music and Windows media sessions
+- Live "now playing" display for macOS system media (including YouTube), Music / Apple Music, and Windows media sessions
 - Fully transparent overlay, ready for an OBS Browser Source
 - Real-time progress bar with elapsed and total time
-- Album artwork from Music.app or Windows SMTC when available, with an automatic iTunes Search API fallback
+- Artwork from macOS Now Playing, Music.app or Windows SMTC; iTunes Search fallback for supported music sources
 - Built-in scaling presets for 1080p and 4K layouts
 - Demo mode for previewing the layout without playing anything
 
 ## Requirements
 
-- macOS with Music.app / Apple Music, or Windows 10/11 with Apple Music for Windows
+- macOS with Music.app / Apple Music or `media-control`, or Windows 10/11 with Apple Music for Windows
 - Python 3.9 or later _(not needed for the Windows portable ZIP)_
 - OBS Studio
 
@@ -79,6 +81,41 @@ Recommended source size:
 | 4K         | `1792 × 600` |
 
 The area around the card is transparent, so a larger OBS source size is perfectly fine.
+
+### macOS: YouTube and other media apps
+
+Install [media-control](https://github.com/ungive/media-control) with Homebrew, then restart the server:
+
+```bash
+brew install media-control
+python3 nowplaying.py
+```
+
+The default `auto` provider detects the helper and follows the app shown in macOS
+Control Center's **Now Playing** panel. Play a YouTube video in your browser to
+display its title, channel, thumbnail and playback progress. The browser must
+publish that information to macOS; Chrome has been verified locally. Other apps
+and browsers work when they publish the same system metadata. Unknown live-stream
+duration is shown as `0:00` with an empty progress bar.
+
+Playback, pause, seeking and reported playback speed are supported. One persistent
+metadata stream is used, with artwork fetched separately when needed. Browser
+videos do not use the iTunes artwork fallback, which could find an unrelated cover.
+Missing thumbnails use the overlay's placeholder.
+
+To require system media explicitly, use `--provider macos-media`. To follow only
+Apple Music, use `--provider macos`. Without `media-control`, `auto` retains the
+Apple Music provider and prints the installation command. Homebrew installations
+in `/opt/homebrew` and `/usr/local` are detected even outside a terminal's PATH.
+
+Tested with `media-control` 0.7.7. The helper uses Apple's private MediaRemote API;
+future macOS changes may require a helper update. If the stream exits or reports
+invalid data, the backend reports an error instead of showing stale playback;
+restart the server after fixing/updating the helper. To check what macOS reports:
+
+```bash
+media-control get --micros --no-artwork
+```
 
 ### Windows setup
 
@@ -167,7 +204,7 @@ python3 nowplaying.py --once
 
 | Option                 | Default     | Description                                     |
 | ---------------------- | ----------- | ----------------------------------------------- |
-| `--provider`           | `auto`      | Provider: `auto`, `macos`, `windows`, or `demo` |
+| `--provider`           | `auto`      | Provider: `auto`, `macos` (Music only), `macos-media` (system media), `windows`, or `demo` |
 | `--port`               | `8765`      | HTTP server port                                |
 | `--bind`               | `127.0.0.1` | HTTP server bind address                        |
 | `--interval`           | `0.25`      | Provider polling interval, in seconds           |
@@ -179,7 +216,7 @@ python3 nowplaying.py --once
 
 ## macOS Permissions
 
-On first run, macOS may ask whether Terminal or Python is allowed to control Music.app.
+When using `--provider macos`, macOS may ask whether Terminal or Python is allowed to control Music.app.
 
 If you accidentally denied it, re-enable access under
 **System Settings → Privacy & Security → Automation** and allow Terminal / Python
@@ -189,12 +226,13 @@ to control Music.
 
 Artwork is resolved in the following order:
 
-1. **Provider artwork** — direct Music.app export on macOS, or SMTC thumbnail data on Windows.
+1. **Provider artwork** — macOS Now Playing artwork, direct Music.app export, or SMTC thumbnail data on Windows.
 2. **iTunes Search API fallback** — a lookup by `artist + title`, used only when
-   provider artwork fails.
+   provider artwork fails. With `macos-media`, this fallback is enabled only for Apple Music, not browser videos or other apps.
 
 `runtime/nowplaying.json` includes `artworkSource` and `artworkError` fields.
 `artworkSource: "music"` means the macOS direct export succeeded,
+`artworkSource: "mediaremote"` means macOS system media artwork was used,
 `artworkSource: "smtc"` means Windows SMTC thumbnail data was used, and
 `artworkSource: "itunes"` means the fallback was used.
 
@@ -223,7 +261,7 @@ While running, the tool writes the following files into `runtime/`:
 | `nowplaying.json`    | Track data consumed by the Browser Source          |
 | `nowplaying.txt`     | Plain-text output, usable as an OBS Text Source    |
 | `cover_<sha256>.*` | Up to 8 recent covers; static covers up to 640px (original JPEG or lossless PNG), or original animated/high-bit-depth covers |
-| `cover_direct.*`, `cover_windows.*` | Raw provider images written only by `--diagnose-artwork` |
+| `cover_direct.*`, `cover_media.*`, `cover_windows.*` | Raw provider images written only by `--diagnose-artwork` |
 
 > Everything under `runtime/` is ignored by `.gitignore`.
 
@@ -270,18 +308,18 @@ http://localhost:8766/overlay.html
 
 ## Privacy
 
-This tool reads playback information from your local Music.app on macOS or from
+This tool reads playback information from macOS Now Playing or local Music.app, or from
 the Windows system media session API on Windows, then writes it to the local
 `runtime/` directory.
 
 By default, when provider artwork retrieval fails, the track title and artist are sent to
 the iTunes Search API to look up fallback artwork. Pass `--no-network-artwork` to
-disable this behavior.
+disable this behavior. The `macos-media` provider never sends browser or other non-Music app metadata to iTunes.
 
 ## Contributing
 
 Issues and pull requests are welcome. When reporting a bug, it helps to include your
-OS version, OBS version, provider (`auto`, `macos`, `windows`, or `demo`), and the
+OS version, OBS version, provider (`auto`, `macos`, `macos-media`, `windows`, or `demo`), and the
 output of `python3 nowplaying.py --diagnose-artwork`.
 
 ## License
@@ -293,6 +331,7 @@ This project is released under the MIT License. See [LICENSE](LICENSE) for detai
 - **Creator** — shin ([GitHub: @m-shintaro](https://github.com/m-shintaro), [X: @xyzmiku](https://x.com/xyzmiku))
 - [OBS Studio](https://obsproject.com/) — streaming software and Browser Source runtime
 - Apple Music / Music.app — source of playback information on macOS
+- [media-control](https://github.com/ungive/media-control) — macOS system Now Playing metadata and artwork (installed separately)
 - Windows Media Control / SMTC — source of playback information on Windows
 - [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/) — fallback artwork lookup
 
