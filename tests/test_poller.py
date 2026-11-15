@@ -12,7 +12,8 @@ from apple_music_obs_overlay import poller
 from apple_music_obs_overlay.artwork import worker
 from apple_music_obs_overlay.artwork.image import normalize_artwork
 from apple_music_obs_overlay.payload import build_payload, make_track_key
-from apple_music_obs_overlay.providers.base import ArtworkResult
+from apple_music_obs_overlay.providers.base import ArtworkResult, BaseProvider
+from apple_music_obs_overlay.providers import macos_media
 from test_itunes import LocalArtworkServer
 
 
@@ -22,7 +23,7 @@ def image_bytes(color='red'):
     return out.getvalue()
 
 
-class Provider:
+class Provider(BaseProvider):
     name = 'test'
 
     def __init__(self, fail_first=False):
@@ -252,3 +253,45 @@ class PollerTests(TestCase):
     def test_definitive_network_miss_is_not_repeated(self):
         calls, _ = self.network_lookups(['itunes:no_results'] * 10)
         self.assertEqual(calls, ['itunes:no_results'])
+
+    def test_provider_change_signal_rereads_an_accepted_cover(self):
+        provider = Provider()
+        provider.revision = 0
+        provider.artwork_revision = lambda: provider.revision
+        def artwork(data, runtime_dir=None):
+            provider.calls += 1
+            color = 'red' if provider.revision == 0 else 'blue'
+            (runtime_dir / 'cover.png').write_bytes(image_bytes(color))
+            return ArtworkResult(file='cover.png', source='test')
+        provider.get_artwork = artwork
+        first = []
+        def done(data):
+            if data['artworkFile'] and not first:
+                first.append(data['artworkVersion'])
+                provider.revision = 1  # e.g. the real thumbnail replaced a placeholder
+            return bool(first) and data['artworkVersion'] not in ('', first[0])
+        with mock.patch.object(poller, 'ARTWORK_REFRESH_INTERVAL', .01):
+            data, _ = self.run_until(provider, done)
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(data[-1]['artworkVersion'],
+                         hashlib.sha256(normalize_artwork(image_bytes('blue'))).hexdigest())
+        self.assertTrue(all(d['artworkFile'] for d in data[data.index(next(
+            d for d in data if d['artworkFile'])):]), 'the visible cover is kept while re-reading')
+
+    def test_macos_cover_updates_without_an_additional_metadata_event(self):
+        provider = Provider()
+        media = macos_media.MacOSMediaProvider(Path('.'), executable='media-control')
+        provider.artwork_revision = media.artwork_revision
+        def artwork(data, runtime_dir=None):
+            provider.calls += 1
+            color = 'red' if provider.calls == 1 else 'blue'
+            (runtime_dir / 'cover.png').write_bytes(image_bytes(color))
+            return ArtworkResult(file='cover.png', source='mediaremote')
+        provider.get_artwork = artwork
+        expected = hashlib.sha256(normalize_artwork(image_bytes('blue'))).hexdigest()
+        with mock.patch.object(macos_media, 'ARTWORK_RECHECK_INTERVAL', .03), \
+                mock.patch.object(poller, 'ARTWORK_REFRESH_INTERVAL', .01):
+            data, _ = self.run_until(provider, lambda d: d['artworkVersion'] == expected)
+        self.assertEqual(media._revision, 0, 'no metadata notifications were emitted')
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(data[-1]['artworkSource'], 'mediaremote')

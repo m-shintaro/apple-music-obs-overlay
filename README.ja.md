@@ -33,21 +33,23 @@
 フォーム非依存のファイルを読み込み、OBS の **Browser Source** にそのまま追加できる
 透過オーバーレイとして描画します。
 
-macOS は標準コマンドの `osascript` と `sips` 経由で Music.app を使用します。
+macOS は任意の追加ツール `media-control` 経由で、OSの「再生中」情報を取得します。
+ブラウザが再生情報を公開していれば、YouTubeなども表示できます。
+追加ツールがない場合は、標準コマンドの `osascript` と `sips` 経由で Music.app を使用します。
 Windows はオプションの Python extra 経由で OS のメディアセッション API（SMTC）を使用します。
 
 ## Features
 
-- macOS Music / Apple Music と Windows メディアセッションのリアルタイム表示
+- macOS のシステム再生情報（YouTubeを含む）、Music / Apple Music、Windows メディアセッションのリアルタイム表示
 - OBS Browser Source 用の完全な透過オーバーレイ
 - 経過時間と総時間を表示するリアルタイム再生バー
-- Music.app または Windows SMTC からジャケット画像を取得し、失敗時は iTunes Search API で自動フォールバック
+- macOSの「再生中」、Music.app、Windows SMTC から画像を取得し、対応する音楽ソースでは iTunes Search API にフォールバック
 - 1080p / 4K 向けの表示倍率プリセットを内蔵
 - 再生していなくてもレイアウトを確認できるデモモード
 
 ## Requirements
 
-- Music.app / Apple Music を備えた macOS、または Apple Music for Windows を備えた Windows 10/11
+- Music.app / Apple Music または `media-control` を備えた macOS、または Apple Music for Windows を備えた Windows 10/11
 - Python 3.9 以降 _(Windows ポータブル ZIP では不要)_
 - OBS Studio
 
@@ -80,6 +82,43 @@ http://localhost:8765/overlay.html
 | 4K     | `1792 × 600` |
 
 カードの周囲は透過です。OBS 側のソースサイズは推奨より大きくしても問題ありません。
+
+### macOSの「再生中」コンテンツを表示する
+
+Homebrewで [media-control](https://github.com/ungive/media-control) をインストールし、サーバーを再起動します。
+
+```bash
+brew install media-control
+python3 nowplaying.py
+```
+
+既定の `auto` は追加ツールを検出し、macOSのコントロールセンターの **「再生中」** に
+表示されるアプリを追従します。ブラウザでYouTubeを再生すると、動画タイトル・投稿者・
+サムネイル・再生位置を表示します。ブラウザがOSに再生情報を公開する必要があります。
+Chromeでの取得を確認済みです。他のブラウザやアプリも同じシステム情報を公開していれば
+取得できます。ライブ配信などで総時間が不明な場合は `0:00` と空の再生バーを表示します。
+
+再生・一時停止・シーク・OSから報告される再生速度に対応します。
+再生情報は1本の常駐プロセスで受け取り、画像は必要なときに別途取得します。
+画像だけの変更で通知が省略される場合に備え、5秒ごとにも再確認します。
+ブラウザ動画では無関係なジャケットを表示しないよう、iTunes検索を使いません。
+サムネイルが取得できない場合はプレースホルダーを表示します。
+
+システム再生情報を明示的に指定する場合は `--provider macos-media`、Apple Musicだけを
+取得する場合は `--provider macos` を使います。追加ツールがない環境の `auto` は従来どおり
+Apple Musicを使用し、インストール方法を表示します。Homebrewの `/opt/homebrew` と
+`/usr/local` はPATHに含まれていなくても検出します。
+
+`media-control` 0.7.7で動作確認しています。追加ツールはAppleの非公開MediaRemote APIを
+使用するため、将来のmacOS更新ではツールの更新が必要になる可能性があります。
+`auto` は起動時に `media-control test` を実行し、ツールが入っていても動作しない場合は
+Apple Musicのプロバイダを使い続けます。取得プロセスが終了した場合や不正なデータを返した
+場合は、古い再生情報を継続せずエラーを記録し、自動で再起動します（1秒後、失敗が続く間は
+最大30秒まで間隔を倍にします）。OS側の取得状況は以下で確認できます。
+
+```bash
+media-control get --micros --no-artwork
+```
 
 ### Windows セットアップ
 
@@ -169,7 +208,7 @@ python3 nowplaying.py --once
 
 | Option                 | Default     | Description                                         |
 | ---------------------- | ----------- | --------------------------------------------------- |
-| `--provider`           | `auto`      | プロバイダー: `auto` / `macos` / `windows` / `demo` |
+| `--provider`           | `auto`      | プロバイダー: `auto` / `macos`（Music専用）/ `macos-media`（システム再生情報）/ `windows` / `demo` |
 | `--port`               | `8765`      | HTTP サーバーのポート                               |
 | `--bind`               | `127.0.0.1` | HTTP サーバーの bind アドレス                       |
 | `--interval`           | `0.25`      | プロバイダーの取得間隔（秒）                        |
@@ -181,7 +220,7 @@ python3 nowplaying.py --once
 
 ## macOS Permissions
 
-初回実行時に、Terminal または Python が Music.app を制御する許可を求められることがあります。
+`--provider macos` の初回実行時に、Terminal または Python が Music.app を制御する許可を求められることがあります。
 
 誤って許可しなかった場合は、**システム設定 → プライバシーとセキュリティ → オートメーション**
 で Terminal / Python から Music を制御できるように設定してください。
@@ -190,13 +229,13 @@ python3 nowplaying.py --once
 
 ジャケット画像は次の順で解決されます。
 
-1. **プロバイダーのジャケット** — macOS では Music.app から直接書き出し、Windows では
+1. **プロバイダーの画像** — macOSでは「再生中」の画像取得または Music.app からの直接書き出し、Windows では
    SMTC のサムネイルデータを使用します。
 2. **iTunes Search API フォールバック** — `artist + title` で検索します。プロバイダーの
-   取得に失敗した場合のみ使用されます。
+   取得に失敗した場合のみ使用されます。`macos-media` ではApple Musicだけが対象で、ブラウザ動画や他アプリには使用しません。
 
 `runtime/nowplaying.json` には `artworkSource` と `artworkError` が含まれます。
-`artworkSource: "music"` は macOS の直接取得に成功、`artworkSource: "smtc"` は
+`artworkSource: "mediaremote"` はmacOSのシステム画像、`artworkSource: "music"` は Music.app の直接取得、`artworkSource: "smtc"` は
 Windows の SMTC サムネイルデータを使用、`artworkSource: "itunes"` はフォールバックを
 使用したことを意味します。
 
@@ -224,7 +263,7 @@ python3 nowplaying.py --no-network-artwork
 | `nowplaying.json`    | Browser Source が読み込む曲情報                  |
 | `nowplaying.txt`     | OBS Text Source でも使える簡易テキスト出力       |
 | `cover_<sha256>.*` | 最大640pxの静止画（元JPEGまたは可逆PNG）、または元のアニメーション・高ビット深度画像。内容ハッシュで命名し、直近8枚まで保持 |
-| `cover_direct.*`, `cover_windows.*` | `--diagnose-artwork` 実行時のみ出力する元画像 |
+| `cover_direct.*`, `cover_media.*`, `cover_windows.*` | `--diagnose-artwork` 実行時のみ出力する元画像 |
 
 > `runtime/` 配下の生成物はすべて `.gitignore` で除外されます。
 
@@ -271,17 +310,18 @@ http://localhost:8766/overlay.html
 
 ## Privacy
 
-このツールは、macOS ではローカルの Music.app から、Windows ではシステムのメディア
+このツールは、macOSでは「再生中」またはローカルの Music.app から、Windows ではシステムのメディア
 セッション API から再生情報を取得し、ローカルの `runtime/` ディレクトリに保存します。
 
 デフォルトでは、プロバイダーからのジャケット取得に失敗した場合のみ、曲名とアーティスト名を
 iTunes Search API に送信してフォールバック画像を検索します。この動作を無効にするには
-`--no-network-artwork` を指定してください。
+`--no-network-artwork` を指定してください。`macos-media` ではブラウザやApple Music以外の
+アプリの情報をiTunesへ送信しません。
 
 ## Contributing
 
 Issue や Pull Request を歓迎します。バグ報告の際は、OS のバージョン、OBS のバージョン、
-プロバイダー（`auto` / `macos` / `windows` / `demo`）、
+プロバイダー（`auto` / `macos` / `macos-media` / `windows` / `demo`）、
 `python3 nowplaying.py --diagnose-artwork` の出力を添えていただけると助かります。
 
 ## License
@@ -293,6 +333,7 @@ Issue や Pull Request を歓迎します。バグ報告の際は、OS のバー
 - **Creator** — shin ([GitHub: @m-shintaro](https://github.com/m-shintaro), [X: @xyzmiku](https://x.com/xyzmiku))
 - [OBS Studio](https://obsproject.com/) — 配信ソフトウェアと Browser Source の実行環境
 - Apple Music / Music.app — macOS 上の再生情報の取得元
+- [media-control](https://github.com/ungive/media-control) — macOSシステム再生情報と画像の取得（別途インストール）
 - Windows Media Control / SMTC — Windows 上の再生情報の取得元
 - [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/) — ジャケット画像のフォールバック検索
 

@@ -389,6 +389,7 @@ const NowPlaying = (() => {
   let progressState = "stopped";
   let progressBaseCurrent = 0;
   let progressDuration = 0;
+  let progressRate = 1;
   let progressBaseAt = performance.now();
   let progressTimer = null;
   let lastProgressInput = null;
@@ -428,7 +429,7 @@ const NowPlaying = (() => {
   }
 
   function currentProgressTime(now = performance.now()) {
-    const elapsed = progressState === "playing" ? (now - progressBaseAt) / 1000 : 0;
+    const elapsed = progressState === "playing" ? (now - progressBaseAt) / 1000 * progressRate : 0;
     const current = Math.max(0, progressBaseCurrent + elapsed);
     return progressDuration > 0 ? Math.min(current, progressDuration) : current;
   }
@@ -470,6 +471,8 @@ const NowPlaying = (() => {
 
     const now = performance.now();
     const nextState = state || progressState;
+    const nextRate = Number.isFinite(Number(options.rate)) && Number(options.rate) >= 0
+      ? Number(options.rate) : 1;
     const nextDuration = duration == null ? progressDuration : Math.max(0, Number(duration) || 0);
     const hasIncomingCurrent = current != null;
     const incomingCurrent = hasIncomingCurrent
@@ -479,7 +482,8 @@ const NowPlaying = (() => {
       hasIncomingCurrent &&
       lastProgressInput &&
       Math.abs(incomingCurrent - lastProgressInput.current) < 0.05 &&
-      nextState === lastProgressInput.state;
+      nextState === lastProgressInput.state &&
+      nextRate === progressRate;
     const keepLocalClock =
       !options.force &&
       progressState === "playing" &&
@@ -488,6 +492,7 @@ const NowPlaying = (() => {
     const nextCurrent = keepLocalClock ? currentProgressTime(now) : incomingCurrent;
 
     progressState = nextState;
+    progressRate = nextRate;
     $("eq").classList.toggle("paused", nextState !== "playing");
     progressDuration = nextDuration;
     progressBaseCurrent = nextDuration > 0 ? Math.min(nextCurrent, nextDuration) : nextCurrent;
@@ -515,9 +520,9 @@ const NowPlaying = (() => {
     } else stopProgressClock();
   }
 
-  function snapProgress(current, duration, state) {
+  function snapProgress(current, duration, state, rate) {
     filled.style.transition = "none";
-    syncProgress(current ?? 0, duration ?? 0, state, { snap: true, force: true });
+    syncProgress(current ?? 0, duration ?? 0, state, { snap: true, force: true, rate });
   }
 
   function metaText(d) {
@@ -574,7 +579,7 @@ const NowPlaying = (() => {
     meta.textContent = metaText(d);
     if (d.art != null) setArt(d.art, false);
     else if (!currentArt) commitArt(fallbackArt, false);
-    snapProgress(d.current, d.duration, d.state);
+    snapProgress(d.current, d.duration, d.state, d.playbackRate);
   }
 
   function changeTrack(d) {
@@ -598,7 +603,7 @@ const NowPlaying = (() => {
       meta.textContent = nextMeta;
     };
     // Sync once now. The text animation must not later restore an old position/state.
-    snapProgress(d.current, d.duration, d.state);
+    snapProgress(d.current, d.duration, d.state, d.playbackRate);
     swapTimer = setTimeout(() => {
       pendingSwap();
 
@@ -636,7 +641,7 @@ const NowPlaying = (() => {
           artPendingUntil = 0;
           if (pendingArt) pendingArt.cancel();
         }
-        syncProgress(d.current, d.duration, d.state);
+        syncProgress(d.current, d.duration, d.state, { rate: d.playbackRate });
         return;
       }
 
@@ -661,7 +666,7 @@ const NowPlaying = (() => {
         artPendingUntil = 0;
         setArt("", true);
       }
-      syncProgress(d.current, d.duration, d.state);
+      syncProgress(d.current, d.duration, d.state, { rate: d.playbackRate });
     }
   };
 })();
@@ -703,7 +708,7 @@ async function updateFromRuntime() {
     const hasTitle = Boolean(data.title);
 
     NowPlaying.update({
-      key: [displayTitle, data.artist, data.album].join("|"),
+      key: JSON.stringify([displayTitle, data.artist, data.album, data.sourceAppId, data.trackId]),
       title: displayTitle,
       artist: hasTitle ? data.artist : "",
       album: hasTitle ? data.album : "",
@@ -713,6 +718,7 @@ async function updateFromRuntime() {
       current: data.position,
       duration: data.duration,
       state: data.state,
+      playbackRate: data.playbackRate,
     });
   } catch (error) {
     // Keep the last visible frame if polling fails briefly.

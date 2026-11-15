@@ -15,6 +15,12 @@ from .poller import poll_loop
 from .providers.base import NowPlayingProvider
 from .providers.demo import DemoProvider
 from .providers.macos_music import MacOSMusicProvider
+from .providers.macos_media import (
+    INSTALL_HELP,
+    MacOSMediaProvider,
+    find_media_control,
+    media_control_works,
+)
 from .providers.windows_media import WindowsMediaProvider
 from .server import serve
 
@@ -81,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=("auto", "macos", "windows", "demo"),
+        choices=("auto", "macos", "macos-media", "windows", "demo"),
         default="auto",
         help="Now-playing provider. Default: auto",
     )
@@ -120,6 +126,8 @@ def parse_args() -> argparse.Namespace:
 def create_provider(name: str, runtime_dir: Path) -> NowPlayingProvider:
     if name == "macos":
         return MacOSMusicProvider(runtime_dir)
+    if name == "macos-media":
+        return MacOSMediaProvider(runtime_dir)
     if name == "windows":
         return WindowsMediaProvider(runtime_dir)
     if name == "demo":
@@ -135,6 +143,19 @@ def resolve_provider_name(args: argparse.Namespace) -> str:
 
     system = platform.system()
     if system == "Darwin":
+        executable = find_media_control()
+        if executable and media_control_works(executable):
+            return "macos-media"
+        if executable:
+            # Installed, but its self-test fails (e.g. after a macOS update).
+            print(
+                "media-control is installed but `media-control test` failed; "
+                "using Apple Music only. Update it with: brew upgrade media-control",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(f"Using Apple Music only. {INSTALL_HELP}", file=sys.stderr, flush=True)
         return "macos"
     if system == "Windows":
         return "windows"
@@ -152,8 +173,15 @@ def main() -> int:
     ensure_runtime_dir(RUNTIME_DIR)
     provider = create_provider(resolve_provider_name(args), RUNTIME_DIR)
 
+    try:
+        return run_provider(args, provider)
+    finally:
+        provider.close()
+
+
+def run_provider(args: argparse.Namespace, provider: NowPlayingProvider) -> int:
     if args.diagnose_artwork:
-        data = provider.get_nowplaying()
+        data = provider.get_nowplaying_once()
         artwork = provider.get_artwork(data)
         print(
             json.dumps(
@@ -171,7 +199,7 @@ def main() -> int:
         return 0
 
     if args.once:
-        data = provider.get_nowplaying()
+        data = provider.get_nowplaying_once()
         write_outputs(data, RUNTIME_DIR)
         print(JSON_FILE)
         return 0
@@ -183,6 +211,8 @@ def main() -> int:
             file=sys.stderr,
             flush=True,
         )
+
+    print(f"Now-playing provider: {provider.name}", flush=True)
 
     stop_event = threading.Event()
     poller = threading.Thread(

@@ -38,6 +38,29 @@ function harness(){
 }
 const track=(extra={})=>({key:'Song',title:'Song',artist:'Artist',album:'Album',state:'paused',current:1,duration:240,art:'/runtime/cover_1.jpg?v=a',...extra});
 
+test('progress follows video speed, speed changes, pause and seek',async()=>{
+ const h=harness();
+ h.sandbox.NP.update(track({state:'playing',current:10,playbackRate:2,art:''}));
+ await h.advance(1000);assert.equal(h.element('cur').textContent,'0:12');
+ h.sandbox.NP.update(track({state:'playing',current:12,playbackRate:.5,art:''}));
+ await h.advance(2000);assert.equal(h.element('cur').textContent,'0:13');
+ h.sandbox.NP.update(track({state:'paused',current:13,playbackRate:0,art:''}));
+ await h.advance(1000);assert.equal(h.element('cur').textContent,'0:13');
+ h.sandbox.NP.update(track({state:'playing',current:2,playbackRate:1,art:''}));
+ await h.advance(1000);assert.equal(h.element('cur').textContent,'0:03');
+});
+
+test('runtime forwards playback speed and distinguishes matching titles across apps',async()=>{
+ const h=harness();
+ const payload={title:'Video',artist:'Channel',album:'',state:'playing',position:10,duration:100,
+  playbackRate:2,sourceAppId:'com.google.Chrome',trackId:'one'};
+ h.requests[0].resolve({ok:true,json:async()=>payload});await flush();
+ await h.advance(1000);assert.equal(h.element('cur').textContent,'0:12');
+ h.requests[1].resolve({ok:true,json:async()=>({...payload,position:0,sourceAppId:'com.apple.Safari'})});
+ await flush();assert(h.element('title').classList.contains('swap-out'));
+ assert.equal(h.element('cur').textContent,'0:00');
+});
+
 test('polling has one request including manual overlaps; aborts and resumes',async()=>{
  const h=harness();for(let i=0;i<120;i++)h.sandbox.updateFromRuntime();
  assert.equal(h.requests.length,1);

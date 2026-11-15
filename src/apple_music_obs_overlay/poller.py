@@ -17,6 +17,9 @@ ARTWORK_RETRY_INTERVAL = 5.0
 # Network lookups per track when they end without a definitive answer
 # (timeout, connection error, failed publication).
 MAX_NETWORK_ARTWORK_ATTEMPTS = 3
+# Minimum spacing of lookups triggered by provider change signals, which can
+# arrive in bursts (seeking, a track change published in several steps).
+ARTWORK_REFRESH_INTERVAL = 1.0
 
 
 def poll_loop(
@@ -33,6 +36,7 @@ def poll_loop(
     last_track_key = ""
     artwork_file = artwork_version = artwork_source = artwork_error = ""
     last_attempt_at = None
+    attempt_revision = 0
     network_attempts = 0
     provider_found = False
     is_demo = isinstance(provider, DemoProvider)
@@ -83,13 +87,20 @@ def poll_loop(
             # Metadata keeps moving while the single artwork worker is busy.
             _safe_write_outputs(data, runtime_dir)
             now = time.monotonic()
-            if (not stop_event.is_set() and playable and not is_demo and not worker.busy and
-                    (last_attempt_at is None or
-                     (not provider_found and now - last_attempt_at >= ARTWORK_RETRY_INTERVAL))):
-                network = (allow_network_artwork and
-                           network_attempts < MAX_NETWORK_ARTWORK_ATTEMPTS)
-                last_attempt_at = now
-                worker.start(generation, data, network)
+            if not stop_event.is_set() and playable and not is_demo and not worker.busy:
+                revision = provider.artwork_revision()
+                # An accepted cover can be a placeholder or the previous
+                # track's image that the source replaces a moment later.
+                changed = (revision != attempt_revision and last_attempt_at is not None and
+                           now - last_attempt_at >= ARTWORK_REFRESH_INTERVAL)
+                retry = (not provider_found and last_attempt_at is not None and
+                         now - last_attempt_at >= ARTWORK_RETRY_INTERVAL)
+                if last_attempt_at is None or changed or retry:
+                    network = (allow_network_artwork and
+                               network_attempts < MAX_NETWORK_ARTWORK_ATTEMPTS)
+                    last_attempt_at = now
+                    attempt_revision = revision
+                    worker.start(generation, data, network)
             stop_event.wait(interval)
     finally:
         worker.close()
