@@ -82,7 +82,7 @@ Recommended source size:
 
 The area around the card is transparent, so a larger OBS source size is perfectly fine.
 
-### macOS: YouTube and other media apps
+### macOS: system Now Playing content
 
 Install [media-control](https://github.com/ungive/media-control) with Homebrew, then restart the server:
 
@@ -99,7 +99,8 @@ and browsers work when they publish the same system metadata. Unknown live-strea
 duration is shown as `0:00` with an empty progress bar.
 
 Playback, pause, seeking and reported playback speed are supported. One persistent
-metadata stream is used, with artwork fetched separately when needed. Browser
+metadata stream is used, with artwork fetched separately when needed and rechecked
+every five seconds to catch image-only updates. Browser
 videos do not use the iTunes artwork fallback, which could find an unrelated cover.
 Missing thumbnails use the overlay's placeholder.
 
@@ -109,9 +110,12 @@ Apple Music provider and prints the installation command. Homebrew installations
 in `/opt/homebrew` and `/usr/local` are detected even outside a terminal's PATH.
 
 Tested with `media-control` 0.7.7. The helper uses Apple's private MediaRemote API;
-future macOS changes may require a helper update. If the stream exits or reports
-invalid data, the backend reports an error instead of showing stale playback;
-restart the server after fixing/updating the helper. To check what macOS reports:
+future macOS changes may require a helper update. `auto` runs `media-control test`
+at startup and keeps the Apple Music provider if the helper is installed but not
+functional. If the stream exits or reports invalid data, the backend reports an
+error instead of showing stale playback and restarts the stream automatically
+(after 1 second, doubling up to 30 seconds while it keeps failing). To check what
+macOS reports:
 
 ```bash
 media-control get --micros --no-artwork

@@ -15,7 +15,12 @@ from .poller import poll_loop
 from .providers.base import NowPlayingProvider
 from .providers.demo import DemoProvider
 from .providers.macos_music import MacOSMusicProvider
-from .providers.macos_media import MacOSMediaProvider, find_media_control, INSTALL_HELP
+from .providers.macos_media import (
+    INSTALL_HELP,
+    MacOSMediaProvider,
+    find_media_control,
+    media_control_works,
+)
 from .providers.windows_media import WindowsMediaProvider
 from .server import serve
 
@@ -138,9 +143,19 @@ def resolve_provider_name(args: argparse.Namespace) -> str:
 
     system = platform.system()
     if system == "Darwin":
-        if find_media_control():
+        executable = find_media_control()
+        if executable and media_control_works(executable):
             return "macos-media"
-        print(f"Using Apple Music only. {INSTALL_HELP}", file=sys.stderr, flush=True)
+        if executable:
+            # Installed, but its self-test fails (e.g. after a macOS update).
+            print(
+                "media-control is installed but `media-control test` failed; "
+                "using Apple Music only. Update it with: brew upgrade media-control",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(f"Using Apple Music only. {INSTALL_HELP}", file=sys.stderr, flush=True)
         return "macos"
     if system == "Windows":
         return "windows"

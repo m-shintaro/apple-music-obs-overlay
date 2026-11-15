@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -21,6 +22,13 @@ from .base import ArtworkResult, BaseProvider
 INSTALL_HELP = "Install macOS system media support with: brew install media-control"
 MAX_METADATA_BYTES = 128 * 1024
 MAX_ARTWORK_BYTES = 20 * 1024 * 1024
+# --no-artwork can suppress an event whose only change was the image.
+ARTWORK_RECHECK_INTERVAL = 5.0
+# A failed stream is restarted after a delay that doubles per consecutive
+# failure. A stream that stayed up this long counts as healthy again.
+RESTART_MIN_DELAY = 1.0
+RESTART_MAX_DELAY = 30.0
+RESTART_STABLE_AFTER = 60.0
 
 
 def find_media_control() -> str | None:
@@ -33,6 +41,32 @@ def find_media_control() -> str | None:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
+
+
+def media_control_works(executable: str, timeout: float = 5.0) -> bool:
+    """Run the helper's self-test: it exits non-zero on an unsupported macOS."""
+    try:
+        # The test may spawn a native player. Own the group so a timeout cannot
+        # leave that player running (and selected as the system Now Playing app).
+        process = subprocess.Popen([executable, "test"], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=True)
+    except OSError:
+        return False
+    finished = False
+    try:
+        result = process.wait(timeout=timeout)
+        finished = True
+        return result == 0
+    except subprocess.TimeoutExpired:
+        return False
+    finally:
+        if not finished:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 
 
 def _number(value: object, default: float = 0.0) -> float:
@@ -68,6 +102,8 @@ class MacOSMediaProvider(BaseProvider):
 
     Uses media-control 0.7.7's JSON interface. A full snapshot replaces the old
     one so missing fields, seeks and app switches cannot retain stale metadata.
+    A stream that ends or sends unusable data reports an error (never stale
+    playback) and is restarted with a growing delay.
     """
 
     name = "macos-media"
@@ -80,36 +116,73 @@ class MacOSMediaProvider(BaseProvider):
         self._ready = threading.Event()
         self._process = None
         self._thread = None
+        self._active = False  # self._process is a stream expected to deliver events
         self._closed = False
         self._error = ""
+        self._permanent = False
+        self._restart_delay = 0.0
+        self._started_at = 0.0
+        self._retry_at = 0.0
+        self._revision = 0
         self._snapshot: Dict[str, Any] = {}
         self._received_at = 0.0
         self._received_epoch = 0.0
 
     def _start(self) -> None:
         with self._lock:
-            if self._process is not None or self._error or self._closed:
+            if self._active or self._closed or self._permanent:
+                return
+            if self._error and time.monotonic() < self._retry_at:
                 return
             if platform.system() != "Darwin":
                 self._error = "macos-media:unsupported_platform"
+                self._permanent = True
             elif not self.executable:
                 self._error = f"macos-media:missing_media_control:{INSTALL_HELP}"
-            else:
-                try:
-                    self._process = subprocess.Popen(
-                        [self.executable, "stream", "--micros", "--no-diff", "--no-artwork"],
-                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    )
-                except OSError as exc:
-                    self._error = f"macos-media:start:{exc}"
-            if self._error:
+                self._permanent = True
+            if self._permanent:
                 self._ready.set()
                 return
-            self._thread = threading.Thread(target=self._read_stream, daemon=True, name="macos-media")
+            self._started_at = time.monotonic()
+            try:
+                process = subprocess.Popen(
+                    [self.executable, "stream", "--micros", "--no-diff", "--no-artwork"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                )
+            except OSError as exc:
+                self._record_failure(f"start:{exc}")
+                return
+            self._process = process
+            self._active = True
+            self._error = ""
+            self._snapshot = {}
+            self._ready.clear()
+            self._thread = threading.Thread(target=self._read_stream, args=(process,),
+                                            daemon=True, name="macos-media")
             self._thread.start()
 
-    def _read_stream(self) -> None:
-        process = self._process
+    def _record_failure(self, reason: str) -> None:
+        """Report an error and schedule the next start. Caller holds the lock."""
+        now = time.monotonic()
+        if now - self._started_at >= RESTART_STABLE_AFTER:
+            self._restart_delay = 0.0
+        # Saturate the delay itself: computing 2 ** failures first eventually
+        # overflows even when min() would have capped the result at 30 seconds.
+        self._restart_delay = min(RESTART_MAX_DELAY,
+                                  max(RESTART_MIN_DELAY, self._restart_delay * 2))
+        self._active = False
+        self._snapshot = {}
+        self._error = f"macos-media:{reason}"
+        self._retry_at = now + self._restart_delay
+        self._ready.set()
+
+    def _fail(self, process, reason: str) -> None:
+        with self._lock:
+            # Ignore a stream that was already replaced, closed or reported.
+            if self._active and process is self._process:
+                self._record_failure(reason)
+
+    def _read_stream(self, process) -> None:
         try:
             while not self._closed:
                 line = process.stdout.readline(MAX_METADATA_BYTES + 1)
@@ -118,33 +191,49 @@ class MacOSMediaProvider(BaseProvider):
                 if len(line) > MAX_METADATA_BYTES:
                     raise ValueError("metadata_too_large")
                 event = json.loads(line)
-                if (not isinstance(event, dict) or event.get("type") != "data" or
-                        event.get("diff") is not False or not isinstance(event.get("payload"), dict)):
+                if not isinstance(event, dict):
+                    raise ValueError("invalid_stream_event")
+                if event.get("type") != "data":
+                    continue  # An event kind this version does not know about.
+                payload = event.get("payload")
+                if payload is None:
+                    payload = {}
+                if event.get("diff") is not False or not isinstance(payload, dict):
                     raise ValueError("invalid_stream_event")
                 with self._lock:
-                    self._snapshot = event["payload"]
+                    if process is not self._process:
+                        return
+                    self._snapshot = payload
+                    self._revision += 1
                     self._received_at = time.monotonic()
                     self._received_epoch = time.time()
                 self._ready.set()
         except (OSError, ValueError) as exc:
-            with self._lock:
-                self._error = f"macos-media:{exc}"
+            self._fail(process, str(exc))
         finally:
-            self._ready.set()
-            self._stop_process()
+            self._stop_process(process)
             process.stdout.close()
 
     def get_nowplaying(self) -> Dict[str, Any]:
         self._start()
         if not self._ready.wait(self.timeout):
-            self.close()
-            return default_payload("error", "macos-media:startup_timeout")
+            with self._lock:
+                process = self._process
+            self._fail(process, "startup_timeout")
+            self._stop_process(process)
         with self._lock:
             if self._closed or self._error:
                 return default_payload("error", self._error or "macos-media:closed")
             # Advance from a monotonic anchor, even if the wall clock changes.
             now = self._received_epoch + time.monotonic() - self._received_at
             return media_payload(self._snapshot, now)
+
+    def artwork_revision(self) -> int:
+        # Check after metadata updates and periodically even without an event:
+        # media-control suppresses duplicate metadata when only artwork changed.
+        # Both counters only increase, so their sum is a valid change token.
+        with self._lock:
+            return self._revision + int(time.monotonic() // ARTWORK_RECHECK_INTERVAL)
 
     def allow_itunes_fallback(self, data: Dict[str, Any]) -> bool:
         # A YouTube video's title/channel is not an iTunes song/artist pair.
@@ -201,8 +290,7 @@ class MacOSMediaProvider(BaseProvider):
         except (OSError, ValueError, binascii.Error) as exc:
             return ArtworkResult(error=f"macos-media:artwork:{exc}")
 
-    def _stop_process(self) -> None:
-        process = self._process
+    def _stop_process(self, process) -> None:
         if process is not None and process.poll() is None:
             try:
                 process.terminate()
@@ -214,8 +302,11 @@ class MacOSMediaProvider(BaseProvider):
                 pass
 
     def close(self) -> None:
-        self._closed = True
+        with self._lock:
+            self._closed = True
+            self._active = False
+            process, thread = self._process, self._thread
         self._ready.set()
-        self._stop_process()
-        if self._thread is not None:
-            self._thread.join(timeout=2)
+        self._stop_process(process)
+        if thread is not None:
+            thread.join(timeout=2)

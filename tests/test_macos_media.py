@@ -1,13 +1,15 @@
 import base64
 import json
+import os
 from io import BytesIO
 from pathlib import Path
 import subprocess
+import signal
 import sys
 from tempfile import TemporaryDirectory
 import time
 from types import SimpleNamespace
-from unittest import TestCase, mock
+from unittest import TestCase, mock, skipUnless
 
 from PIL import Image
 
@@ -147,6 +149,93 @@ class MacOSMediaTests(TestCase):
         self.assertIn("startup_timeout", self.provider.get_nowplaying()["error"])
         self.assertIsNotNone(self.provider._process.poll())
 
+    def event(self, payload=None, **fields):
+        return json.dumps(dict(dict(type="data", diff=False,
+                                    payload=snapshot(playing=False) if payload is None else payload),
+                               **fields))
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            data = self.provider.get_nowplaying()
+            if predicate(data):
+                return data
+            time.sleep(.01)
+        self.fail(f"condition not reached: {data}")
+
+    def test_ended_stream_reports_error_then_restarts_and_recovers(self):
+        marker = self.root / "exit"
+        script = (f"from pathlib import Path\nimport time\nprint({self.event()!r}, flush=True)\n"
+                  f"while not Path({str(marker)!r}).exists(): time.sleep(.01)")
+        popen = self.start_helper(script)
+        with mock.patch.object(macos_media, "RESTART_MIN_DELAY", .05):
+            self.assertEqual(self.provider.get_nowplaying()["title"], "Video 日本語")
+            marker.touch()
+            failed = self.wait_for(lambda d: d["state"] == "error")
+            self.assertIn("stream_ended", failed["error"])
+            self.assertEqual(failed["title"], "", "a dead stream must not keep stale playback")
+            marker.unlink()
+            self.wait_for(lambda d: d["title"] == "Video 日本語")
+        self.assertEqual(popen.call_count, 2)
+
+    def test_startup_timeout_is_retried_and_keeps_its_cause(self):
+        self.provider.timeout = .1
+        popen = self.start_helper("import time; time.sleep(30)")
+        with mock.patch.object(macos_media, "RESTART_MIN_DELAY", .3):
+            for _ in range(3):
+                self.assertIn("startup_timeout", self.provider.get_nowplaying()["error"])
+            popen.assert_called_once()
+            time.sleep(.3)
+            self.assertIn("startup_timeout", self.provider.get_nowplaying()["error"])
+        self.assertEqual(popen.call_count, 2)
+
+    def test_restart_delay_doubles_up_to_a_cap_and_resets_after_a_stable_run(self):
+        delays = []
+        with mock.patch.object(macos_media.time, "monotonic", return_value=1000.0):
+            self.provider._started_at = 1000.0
+            for _ in range(7):
+                self.provider._record_failure("stream_ended")
+                delays.append(self.provider._retry_at - 1000.0)
+            self.provider._started_at = 1000.0 - macos_media.RESTART_STABLE_AFTER
+            self.provider._record_failure("stream_ended")
+            delays.append(self.provider._retry_at - 1000.0)
+        self.assertEqual(delays, [1, 2, 4, 8, 16, 30, 30, 1])
+
+    def test_restart_delay_stays_bounded_after_thousands_of_failures(self):
+        with mock.patch.object(macos_media.time, "monotonic", return_value=1000.0):
+            self.provider._started_at = 1000.0
+            for _ in range(2000):
+                self.provider._record_failure("stream_ended")
+            self.assertEqual(self.provider._retry_at, 1030.0)
+            self.assertEqual(self.provider._error, "macos-media:stream_ended")
+
+    def test_unknown_event_kinds_are_skipped(self):
+        unknown = json.dumps(dict(type="future-kind", detail=[1, 2]))
+        self.start_helper(f"import time; print({unknown!r}, flush=True); "
+                          f"print({self.event()!r}, flush=True); time.sleep(30)")
+        self.assertEqual(self.provider.get_nowplaying()["title"], "Video 日本語")
+
+    def test_null_payload_means_nothing_is_playing(self):
+        null = json.dumps(dict(type="data", diff=False, payload=None))
+        self.start_helper(f"import time; print({null!r}, flush=True); time.sleep(30)")
+        data = self.provider.get_nowplaying()
+        self.assertEqual((data["state"], data["error"]), ("stopped", ""))
+
+    def test_every_stream_event_advances_the_artwork_revision(self):
+        # Keep only the periodic component fixed while real process time advances.
+        with mock.patch.object(macos_media, "ARTWORK_RECHECK_INTERVAL", float("inf")):
+            self.assertEqual(self.provider.artwork_revision(), 0)
+            self.start_helper(f"import time; print({self.event()!r}, flush=True); "
+                              f"print({self.event()!r}, flush=True); time.sleep(30)")
+            self.wait_for(lambda d: self.provider.artwork_revision() == 2)
+
+    def test_artwork_is_rechecked_even_when_image_only_changes_emit_no_event(self):
+        self.provider._revision = 4
+        with mock.patch.object(macos_media.time, "monotonic", return_value=100.0):
+            first = self.provider.artwork_revision()
+        with mock.patch.object(macos_media.time, "monotonic", return_value=105.0):
+            self.assertGreater(self.provider.artwork_revision(), first)
+
     def test_monotonic_anchor_ignores_wall_clock_changes(self):
         self.provider._snapshot = snapshot(playbackRate=2)
         self.provider._received_at = 50
@@ -204,11 +293,64 @@ class MacOSProviderSelectionTests(TestCase):
         args = SimpleNamespace(demo=False, provider="auto")
         with mock.patch.object(cli.platform, "system", return_value="Darwin"):
             with mock.patch.object(cli, "find_media_control", return_value="/opt/homebrew/bin/media-control"):
-                self.assertEqual(cli.resolve_provider_name(args), "macos-media")
+                with mock.patch.object(cli, "media_control_works", return_value=True) as works:
+                    self.assertEqual(cli.resolve_provider_name(args), "macos-media")
+                works.assert_called_once_with("/opt/homebrew/bin/media-control")
+                # Installed but not functional on this macOS: keep Apple Music working.
+                with mock.patch.object(cli, "media_control_works", return_value=False), \
+                        mock.patch("sys.stderr") as stderr:
+                    self.assertEqual(cli.resolve_provider_name(args), "macos")
+                self.assertIn("media-control test", "".join(
+                    call.args[0] for call in stderr.write.call_args_list))
             with mock.patch.object(cli, "find_media_control", return_value=None), mock.patch("sys.stderr"):
                 self.assertEqual(cli.resolve_provider_name(args), "macos")
         args.provider = "macos"
         self.assertEqual(cli.resolve_provider_name(args), "macos")
+
+    def test_helper_self_test_decides_whether_it_is_usable(self):
+        process = mock.Mock(pid=12345)
+        process.wait.return_value = 0
+        with mock.patch.object(macos_media.subprocess, "Popen", return_value=process) as call:
+            self.assertTrue(macos_media.media_control_works("media-control"))
+        self.assertEqual(call.call_args.args[0], ["media-control", "test"])
+        self.assertTrue(call.call_args.kwargs["start_new_session"])
+        process.wait.return_value = 1
+        with mock.patch.object(macos_media.subprocess, "Popen", return_value=process):
+            self.assertFalse(macos_media.media_control_works("media-control"))
+        with mock.patch.object(macos_media.subprocess, "Popen", side_effect=OSError("gone")):
+            self.assertFalse(macos_media.media_control_works("media-control"))
+        process.wait.side_effect = [subprocess.TimeoutExpired("test", 5), -9]
+        with mock.patch.object(macos_media.subprocess, "Popen", return_value=process), \
+                mock.patch.object(macos_media.os, "killpg", create=True) as killpg:
+            self.assertFalse(macos_media.media_control_works("media-control"))
+        killpg.assert_called_once_with(12345, signal.SIGKILL)
+
+    @skipUnless(os.name == "posix", "macOS helper uses POSIX process groups")
+    def test_self_test_timeout_stops_its_child_player(self):
+        original_popen = subprocess.Popen
+        with TemporaryDirectory() as tmp:
+            heartbeat = Path(tmp) / "heartbeat"
+            script = ("import os, time\nfrom pathlib import Path\n"
+                      "if os.fork() == 0:\n"
+                      "    while True:\n"
+                      f"        Path({str(heartbeat)!r}).write_text(str(time.monotonic()))\n"
+                      "        time.sleep(.01)\n"
+                      "else:\n    time.sleep(30)\n")
+            def spawn(command, **kwargs):
+                process = original_popen([sys.executable, "-u", "-c", script], **kwargs)
+                def cleanup():
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+                self.addCleanup(cleanup)
+                return process
+            with mock.patch.object(macos_media.subprocess, "Popen", side_effect=spawn):
+                self.assertFalse(macos_media.media_control_works("media-control", timeout=.4))
+            last_heartbeat = heartbeat.read_text()
+            time.sleep(.1)
+            self.assertEqual(heartbeat.read_text(), last_heartbeat)
 
     def test_cli_closes_provider_even_when_running_fails(self):
         provider = mock.Mock()
