@@ -7,7 +7,7 @@ import threading
 from typing import Any, Dict
 
 from .image import normalize_artwork
-from .itunes import fetch_artwork_from_itunes_search
+from .itunes import CONCLUSIVE_ERRORS, fetch_artwork_from_itunes_search
 from ..providers.base import NowPlayingProvider
 
 
@@ -20,6 +20,8 @@ class ArtworkJobResult:
     provider_found: bool = False
     track_changed: bool = False
     network_attempted: bool = False
+    # The network lookup gave a definitive answer; retrying it is pointless.
+    network_conclusive: bool = False
 
 
 class ArtworkWorker:
@@ -94,6 +96,7 @@ class ArtworkWorker:
                         data, scratch, self.country, cancel_event=self.cancel_event)
                     if self.cancel_event.is_set():
                         return
+                    result.network_conclusive = bool(file) or error in CONCLUSIVE_ERRORS
                     if file:
                         result.image = normalize_artwork((scratch / file).read_bytes())
                         result.source = "itunes"

@@ -10,6 +10,8 @@ class ArtworkResult:
     file: str = ""
     source: str = ""
     error: str = ""
+    # The sampled artwork cannot be attributed to the requested track (yet):
+    # retry promptly with a fresh snapshot instead of falling back to network.
     track_changed: bool = False
 
 

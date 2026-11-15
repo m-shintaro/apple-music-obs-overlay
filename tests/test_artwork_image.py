@@ -1,8 +1,9 @@
 from io import BytesIO
-from unittest import TestCase
+from unittest import TestCase, mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from PIL import Image, ImageCms, PngImagePlugin
+from apple_music_obs_overlay.artwork import image as image_module
 from apple_music_obs_overlay.artwork.image import normalize_artwork, MAX_ARTWORK_SIZE
 from apple_music_obs_overlay.artwork.cache import ArtworkCache, MAX_CACHED_ARTWORK
 
@@ -83,6 +84,12 @@ class ArtworkImageTests(TestCase):
         with Image.open(BytesIO(normalize_artwork(source.getvalue()))) as result:
             self.assertEqual(result.size, (MAX_ARTWORK_SIZE // 2, MAX_ARTWORK_SIZE))
             self.assertNotIn(274, result.getexif())
+
+    def test_missing_pillow_publishes_original_bytes_instead_of_failing(self):
+        out = BytesIO()
+        Image.new('RGB', (MAX_ARTWORK_SIZE * 2, MAX_ARTWORK_SIZE), 'red').save(out, 'PNG')
+        with mock.patch.object(image_module, 'Image', None):
+            self.assertEqual(normalize_artwork(out.getvalue()), out.getvalue())
 
     def test_invalid_data_is_rejected(self):
         with self.assertRaises(OSError):

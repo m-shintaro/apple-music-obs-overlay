@@ -49,7 +49,7 @@ ignore unknown fields for forward compatibility.
 | `artworkVersion` | string | SHA-256 of the published image bytes, or empty while artwork is unavailable. Changes only when image content changes. |
 | `artworkSource` | string | Artwork source such as `music`, `smtc`, or `itunes`. |
 | `artworkError` | string | Last artwork retrieval error. Empty when artwork was found or no lookup was attempted. |
-| `artworkPending` | boolean | Artwork lookup is pending. The overlay retains its visible cover until the lookup completes, avoiding placeholder flashes between tracks sharing artwork. Missing means false for compatibility. |
+| `artworkPending` | boolean | Artwork lookup is pending. The overlay retains its visible cover while the lookup runs, avoiding placeholder flashes between tracks sharing artwork; after a track change it falls back to the placeholder if the lookup is still pending after 2.5 seconds. Missing means false for compatibility. |
 | `updatedAt` | number | Unix timestamp written by the backend. |
 | `error` | string | Provider or metadata error. Empty when the provider has no diagnostic to report. |
 
@@ -60,7 +60,9 @@ ignore unknown fields for forward compatibility.
 - Demo mode writes sample playback data and does not attempt artwork lookup.
 - Artwork is fetched asynchronously; metadata may arrive first with empty artwork fields.
 - Native artwork is accepted only when its sampled track matches the requested metadata. A mismatch is retried on the next poll without consuming the network fallback attempt.
-- The iTunes fallback has a 5-second total deadline, including search and image download, and is cancelled when the track changes. Native providers retain their own API timeouts.
+- The iTunes fallback has a 5-second total deadline, including search and image download, measured once its worker process is running, and is cancelled when the track changes. A definitive answer (a cover, or no match) ends the fallback for that track; timeouts and other transient failures are retried, up to 3 lookups per track. Native providers retain their own API timeouts.
+- On Windows, a track from a different album that still reports the previous cover's exact thumbnail is retried for up to 2 seconds before that thumbnail is accepted, because SMTC can update text before artwork.
+- Without Pillow installed, covers are published unmodified at their original size.
 - JSON is written before the optional text output. A locked text file is retried on the next poll without delaying JSON through replacement backoff.
 - Ordinary static images are at most 640px, preserving color profiles and transparency. JPEGs already within that size retain their original bytes; other static images use lossless PNG. Animated images and 16-bit grayscale PNGs retain their original bytes and dimensions. All use content-based filenames. The cache retains up to 8 recent covers; files temporarily locked by Windows readers are retried for deletion on the next publication.
 - Missing metadata or artwork should be reported in `error` or `artworkError`; it should not stop the HTTP server.

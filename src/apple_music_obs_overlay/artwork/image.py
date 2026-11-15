@@ -7,7 +7,14 @@ from typing import Tuple
 
 from ..output import atomic_write_bytes
 
-from PIL import Image, ImageCms, ImageOps
+try:
+    from PIL import Image, ImageCms, ImageOps
+except ImportError:
+    # Running straight from a clone without `pip install .` must keep working:
+    # covers are then published at their original size and encoding.
+    Image = ImageCms = ImageOps = None
+
+PILLOW_AVAILABLE = Image is not None
 
 
 # 104 CSS pixels at scale=3, with 2x sampling for crisp artwork.
@@ -16,6 +23,8 @@ MAX_ARTWORK_SIZE = 640
 
 def normalize_artwork(data: bytes) -> bytes:
     """Bound static covers without lossy re-encoding; preserve animated originals."""
+    if Image is None:
+        return data
     with Image.open(BytesIO(data)) as image:
         if getattr(image, "is_animated", False):
             return data

@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+import hashlib
 from pathlib import Path
 import platform
+from time import monotonic
 from typing import Any, Dict, Iterable, Tuple
 
 from ..artwork.image import write_runtime_image
-from ..payload import build_payload, default_payload, same_track
+from ..payload import build_payload, default_payload, make_track_key, same_track
 from .base import ArtworkResult, BaseProvider
 
 
 WINDOWS_EXTRA_HELP = 'install the Windows extra with: py -3 -m pip install ".[windows]"'
 MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024
+# How long a new album may keep returning the previous cover's exact bytes
+# before that thumbnail is trusted (two albums can legitimately share one).
+STALE_THUMBNAIL_GRACE = 2.0
 
 
 class WindowsMediaUnavailable(RuntimeError):
@@ -25,6 +30,10 @@ class WindowsMediaProvider(BaseProvider):
     def __init__(self, runtime_dir: Path, timeout: float = 5.0) -> None:
         self.runtime_dir = runtime_dir
         self.timeout = timeout
+        # (app id, album, sha256) of the last thumbnail handed out.
+        self._last_thumbnail: Tuple[str, str, bytes] | None = None
+        # (track key, first seen) of a track whose thumbnail looks left over.
+        self._suspect_thumbnail: Tuple[str, float] | None = None
 
     def get_nowplaying(self) -> Dict[str, Any]:
         if platform.system() != "Windows":
@@ -56,11 +65,35 @@ class WindowsMediaProvider(BaseProvider):
 
         if error:
             return ArtworkResult(error=error, track_changed=error == "windows:thumbnail:track_changed")
+        if self._thumbnail_may_be_stale(data, image):
+            return ArtworkResult(error="windows:thumbnail:stale", track_changed=True)
 
         artwork_file, write_error = write_runtime_image(image, runtime_dir or self.runtime_dir, "cover_windows")
         if artwork_file:
             return ArtworkResult(file=artwork_file, source=source, error="")
         return ArtworkResult(error=f"windows:thumbnail:{write_error}")
+
+    def _thumbnail_may_be_stale(self, data: Dict[str, Any], image: bytes) -> bool:
+        """SMTC can publish a new track's text before its thumbnail.
+
+        The text snapshot then matches while the image still belongs to the
+        previous track. Ask for a prompt retry while a different album keeps
+        returning the previous cover's exact bytes, up to STALE_THUMBNAIL_GRACE.
+        """
+        app = str(data.get("sourceAppId") or "")
+        album = str(data.get("album") or "")
+        digest = hashlib.sha256(image).digest()
+        last = self._last_thumbnail
+        if last is not None and last[0] == app and last[1] != album and last[2] == digest:
+            key = make_track_key(data)
+            now = monotonic()
+            if self._suspect_thumbnail is None or self._suspect_thumbnail[0] != key:
+                self._suspect_thumbnail = (key, now)
+            if now - self._suspect_thumbnail[1] < STALE_THUMBNAIL_GRACE:
+                return True
+        self._suspect_thumbnail = None
+        self._last_thumbnail = (app, album, digest)
+        return False
 
     async def _read_nowplaying(self) -> Dict[str, Any]:
         manager = await self._request_manager()

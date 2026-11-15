@@ -53,6 +53,7 @@ Windows はオプションの Python extra 経由で OS のメディアセッシ
 
 > 通常の静止ジャケットを追加のJPEG圧縮なしで最大640pxに縮小するため Pillow を使用します。Windows では
 > `winsdk` をインストールする `windows` extra も必要です。ポータブル ZIP には同梱されています。
+> Pillow が無い場合もクローンからそのまま起動でき、ジャケットは元のサイズのまま配信されます。
 
 ## Quick Start
 

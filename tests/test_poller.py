@@ -217,3 +217,38 @@ class PollerTests(TestCase):
         _, covers = self.run_until(provider, done)
         self.assertEqual(provider.calls, 2)
         self.assertEqual(len(covers), 1)
+
+    def network_lookups(self, errors):
+        provider = Provider()
+        provider.get_artwork = lambda *args, **kwargs: ArtworkResult(error='missing')
+        errors = iter(errors)
+        calls = []
+        def fallback(data, root, country, cancel_event=None):
+            calls.append(next(errors))
+            if calls[-1]:
+                return '', calls[-1]
+            (root / 'fallback.png').write_bytes(image_bytes('blue'))
+            return 'fallback.png', ''
+        idle = []
+        def done(data):
+            # Settled once several provider-only retries pass without a lookup.
+            idle.append(len(calls))
+            return bool(data['artworkFile']) or (len(idle) > 60 and idle[-60] == len(calls))
+        with mock.patch.object(poller, 'ARTWORK_RETRY_INTERVAL', .01):
+            with mock.patch.object(worker, 'fetch_artwork_from_itunes_search', side_effect=fallback):
+                data, _ = self.run_until(provider, done, True)
+        return calls, data[-1]
+
+    def test_transient_network_failure_is_retried_and_recovers(self):
+        calls, data = self.network_lookups(['itunes:timeout', ''])
+        self.assertEqual(calls, ['itunes:timeout', ''])
+        self.assertEqual(data['artworkSource'], 'itunes')
+
+    def test_transient_network_failures_are_bounded_per_track(self):
+        calls, data = self.network_lookups(['itunes:timeout'] * 10)
+        self.assertEqual(len(calls), poller.MAX_NETWORK_ARTWORK_ATTEMPTS)
+        self.assertFalse(data['artworkFile'])
+
+    def test_definitive_network_miss_is_not_repeated(self):
+        calls, _ = self.network_lookups(['itunes:no_results'] * 10)
+        self.assertEqual(calls, ['itunes:no_results'])

@@ -12,7 +12,7 @@ function harness(){
  const element=id=>{
   if(!elements.has(id)){
    const classes=new Set(); let text='',writes=0;
-   elements.set(id,{style:{},offsetWidth:100,classList:{add:(...cs)=>cs.forEach(c=>classes.add(c)),remove:(...cs)=>cs.forEach(c=>classes.delete(c)),toggle:(c,on)=>on?classes.add(c):classes.delete(c)},
+   elements.set(id,{style:{},offsetWidth:100,classList:{add:(...cs)=>cs.forEach(c=>classes.add(c)),remove:(...cs)=>cs.forEach(c=>classes.delete(c)),toggle:(c,on)=>on?classes.add(c):classes.delete(c),contains:c=>classes.has(c)},
     get textContent(){return text},set textContent(v){text=v;writes++},get textWrites(){return writes}});
   }
   return elements.get(id);
@@ -126,4 +126,37 @@ test('pending metadata keeps a shared cover without reloading; a missing result 
  assert.equal(h.element('art0').style.backgroundImage,visible);
  await h.advance(250);await respond({...data,title:'Second',artworkFile:'',artworkPending:false});
  assert(h.element('art1').style.backgroundImage.includes('data:image/svg'));
+});
+
+test('a slow lookup stops showing the previous cover after the grace period',async()=>{
+ const h=harness();h.sandbox.NP.update(track({state:'playing'}));h.images[0].onload();
+ const pending=track({key:'New',title:'New',state:'playing',art:undefined});
+ h.sandbox.NP.update(pending);
+ await h.advance(2400);h.sandbox.NP.update(pending);
+ assert(h.element('art0').classList.contains('active'),'cover is kept while the lookup is quick');
+ await h.advance(100);h.sandbox.NP.update(pending);
+ assert(h.element('art1').style.backgroundImage.includes('data:image/svg'));
+ assert(h.element('art1').classList.contains('active'));
+ h.sandbox.NP.update(track({key:'New',title:'New',state:'playing',art:'/runtime/cover_0.jpg?v=b'}));
+ h.images[1].onload();
+ assert(h.element('art0').style.backgroundImage.includes('v=b'));
+});
+
+test('artwork retries on the same track never replace a resolved cover',async()=>{
+ const h=harness();h.sandbox.NP.update(track({state:'playing'}));h.images[0].onload();
+ const retrying=track({state:'playing',art:undefined});
+ for(let i=0;i<5;i++){await h.advance(3000);h.sandbox.NP.update(retrying)}
+ assert(h.element('art0').style.backgroundImage.includes('v=a'));
+ assert(h.element('art0').classList.contains('active'));
+});
+
+test('stopping during the text swap still shows the new track',async()=>{
+ const h=harness();h.sandbox.NP.update(track({art:''}));
+ h.sandbox.NP.update(track({key:'New',title:'New',artist:'Other',art:''}));
+ assert.equal(h.element('title').textContent,'Song');
+ h.sandbox.NP.update({state:'stopped'});
+ assert.equal(h.element('title').textContent,'New');
+ assert.equal(h.element('meta').textContent,'Other \u00b7 Album');
+ await h.advance(1000);
+ assert.equal(h.element('title').textContent,'New');
 });

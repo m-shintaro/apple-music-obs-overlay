@@ -14,6 +14,9 @@ from .providers.demo import DemoProvider
 
 
 ARTWORK_RETRY_INTERVAL = 5.0
+# Network lookups per track when they end without a definitive answer
+# (timeout, connection error, failed publication).
+MAX_NETWORK_ARTWORK_ATTEMPTS = 3
 
 
 def poll_loop(
@@ -30,7 +33,7 @@ def poll_loop(
     last_track_key = ""
     artwork_file = artwork_version = artwork_source = artwork_error = ""
     last_attempt_at = None
-    network_attempted = False
+    network_attempts = 0
     provider_found = False
     is_demo = isinstance(provider, DemoProvider)
 
@@ -45,23 +48,32 @@ def poll_loop(
                 last_track_key = track_key
                 artwork_file = artwork_version = artwork_source = artwork_error = ""
                 last_attempt_at = None
-                network_attempted = provider_found = False
+                network_attempts = 0
+                provider_found = False
 
             result = worker.take_result()
             if result is not None and result.generation == generation and playable:
                 # A sampled track mismatch needs a fresh snapshot immediately;
                 # other misses retry five seconds after completion.
                 last_attempt_at = None if result.track_changed else time.monotonic()
-                network_attempted = network_attempted or result.network_attempted
+                published = False
                 if result.image:
                     try:
                         artwork_file, artwork_version = cache.publish(result.image)
                         artwork_source, artwork_error = result.source, ""
                         provider_found = result.provider_found
+                        published = True
                     except OSError as exc:
                         artwork_error = f"artwork:publish:{exc}"
                 elif not artwork_file:
                     artwork_error = result.error
+                if result.network_attempted:
+                    # Only a definitive answer ends the fallback for this track.
+                    # A transient failure must not cost the track its cover.
+                    settled = result.network_conclusive and (published or not result.image)
+                    network_attempts = (
+                        MAX_NETWORK_ARTWORK_ATTEMPTS if settled else network_attempts + 1
+                    )
 
             if playable:
                 data.update(artworkFile=artwork_file, artworkVersion=artwork_version,
@@ -74,7 +86,8 @@ def poll_loop(
             if (not stop_event.is_set() and playable and not is_demo and not worker.busy and
                     (last_attempt_at is None or
                      (not provider_found and now - last_attempt_at >= ARTWORK_RETRY_INTERVAL))):
-                network = allow_network_artwork and not network_attempted
+                network = (allow_network_artwork and
+                           network_attempts < MAX_NETWORK_ARTWORK_ATTEMPTS)
                 last_attempt_at = now
                 worker.start(generation, data, network)
             stop_event.wait(interval)

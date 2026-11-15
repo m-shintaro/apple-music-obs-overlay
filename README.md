@@ -52,6 +52,7 @@ Windows uses the OS media session API (SMTC) through an optional Python extra.
 
 > Pillow resizes ordinary static artwork to at most 640px without added JPEG compression. Windows support also
 > requires the optional `windows` extra, which installs `winsdk`. Both are bundled in the portable ZIP.
+> Without Pillow the overlay still runs from a clone; artwork is then served at its original size.
 
 ## Quick Start
 

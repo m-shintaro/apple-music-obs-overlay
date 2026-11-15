@@ -9,6 +9,7 @@ import sys
 import sysconfig
 import threading
 
+from .artwork.image import PILLOW_AVAILABLE
 from .output import ensure_runtime_dir, write_outputs
 from .poller import poll_loop
 from .providers.base import NowPlayingProvider
@@ -174,6 +175,14 @@ def main() -> int:
         write_outputs(data, RUNTIME_DIR)
         print(JSON_FILE)
         return 0
+
+    if not PILLOW_AVAILABLE:
+        print(
+            "Pillow is not installed; artwork is served at its original size. "
+            "Install it with: python3 -m pip install Pillow",
+            file=sys.stderr,
+            flush=True,
+        )
 
     stop_event = threading.Event()
     poller = threading.Thread(

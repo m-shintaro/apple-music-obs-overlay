@@ -226,3 +226,51 @@ class ThumbnailIdentityTests(TestCase):
         self.assertTrue(result.track_changed)
         self.assertEqual(files, [])
         self.assertEqual(opened, [])
+
+
+class StaleThumbnailTests(TestCase):
+    PNG = b'\x89PNG\r\n\x1a\n'
+
+    def setUp(self):
+        from tempfile import TemporaryDirectory
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.provider = WindowsMediaProvider(self.root)
+        self.image = self.PNG + b'first'
+        self.now = 100.0
+
+        async def read(expected):
+            return self.image, 'smtc', ''
+
+        for patcher in (
+            mock.patch.object(windows_media.platform, 'system', return_value='Windows'),
+            mock.patch.object(self.provider, '_read_thumbnail_bytes', side_effect=read),
+            mock.patch.object(windows_media, 'monotonic', side_effect=lambda: self.now),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def artwork(self, title, album):
+        return self.provider.get_artwork(
+            {'title': title, 'artist': 'Artist', 'album': album, 'sourceAppId': 'AppleMusic'})
+
+    def test_previous_cover_under_a_new_album_is_retried_until_it_changes(self):
+        self.assertTrue(self.artwork('A', 'First').file)
+        stale = self.artwork('B', 'Second')
+        self.assertEqual((stale.file, stale.error), ('', 'windows:thumbnail:stale'))
+        self.assertTrue(stale.track_changed, 'must retry promptly without the network fallback')
+        self.image = self.PNG + b'second'
+        self.assertTrue(self.artwork('B', 'Second').file)
+
+    def test_identical_cover_is_accepted_after_the_grace_period(self):
+        self.assertTrue(self.artwork('A', 'First').file)
+        self.assertTrue(self.artwork('B', 'Second').track_changed)
+        self.now += windows_media.STALE_THUMBNAIL_GRACE
+        accepted = self.artwork('B', 'Second')
+        self.assertFalse(accepted.track_changed)
+        self.assertTrue(accepted.file)
+
+    def test_tracks_of_one_album_share_a_cover_immediately(self):
+        self.assertTrue(self.artwork('A', 'First').file)
+        self.assertTrue(self.artwork('B', 'First').file)
