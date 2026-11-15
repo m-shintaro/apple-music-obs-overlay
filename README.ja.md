@@ -9,7 +9,7 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![OBS](https://img.shields.io/badge/OBS-Browser%20Source-302E31)
-![Dependencies](https://img.shields.io/badge/dependencies-optional%20Windows%20extra-brightgreen)
+![Dependencies](https://img.shields.io/badge/dependencies-Pillow%20%2B%20Windows%20extra-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 [English](README.md) · **日本語**
@@ -51,8 +51,9 @@ Windows はオプションの Python extra 経由で OS のメディアセッシ
 - Python 3.9 以降 _(Windows ポータブル ZIP では不要)_
 - OBS Studio
 
-> macOS では追加の Python パッケージは不要です。Windows サポートには、`winsdk` を
-> インストールするオプションの `windows` extra が必要です。
+> 通常の静止ジャケットを追加のJPEG圧縮なしで最大640pxに縮小するため Pillow を使用します。Windows では
+> `winsdk` をインストールする `windows` extra も必要です。ポータブル ZIP には同梱されています。
+> Pillow が無い場合もクローンからそのまま起動でき、ジャケットは元のサイズのまま配信されます。
 
 ## Quick Start
 
@@ -61,6 +62,7 @@ Windows はオプションの Python extra 経由で OS のメディアセッシ
 ```bash
 git clone https://github.com/m-shintaro/apple-music-obs-overlay.git
 cd apple-music-obs-overlay
+python3 -m pip install .
 python3 nowplaying.py
 ```
 
@@ -210,6 +212,9 @@ python3 nowplaying.py --diagnose-artwork
 python3 nowplaying.py --no-network-artwork
 ```
 
+ジャケット取得は同時1件で実行し、取得中も曲情報を更新します。画像のバージョンには
+縮小後の内容ハッシュを使い、同じジャケットは再利用します。色プロファイルと透明度を保持し、アニメーション画像と16bitグレースケールPNGは元データをそのまま使用します。
+
 ## Generated Files
 
 実行中、以下のファイルが `runtime/` に生成されます。
@@ -218,9 +223,8 @@ python3 nowplaying.py --no-network-artwork
 | -------------------- | ------------------------------------------------ |
 | `nowplaying.json`    | Browser Source が読み込む曲情報                  |
 | `nowplaying.txt`     | OBS Text Source でも使える簡易テキスト出力       |
-| `cover_direct.*`     | Music.app から直接取得したジャケット画像         |
-| `cover_windows.*`    | Windows SMTC サムネイルデータから取得した画像    |
-| `cover_fallback.jpg` | iTunes Search API から取得したフォールバック画像 |
+| `cover_<sha256>.*` | 最大640pxの静止画（元JPEGまたは可逆PNG）、または元のアニメーション・高ビット深度画像。内容ハッシュで命名し、直近8枚まで保持 |
+| `cover_direct.*`, `cover_windows.*` | `--diagnose-artwork` 実行時のみ出力する元画像 |
 
 > `runtime/` 配下の生成物はすべて `.gitignore` で除外されます。
 

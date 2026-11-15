@@ -9,6 +9,7 @@ description = "Apple Music / now-playing OBS overlay backend"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+dependencies = ["Pillow>=10.4"]
 
 [project.optional-dependencies]
 windows = [

@@ -14,23 +14,23 @@ def ensure_runtime_dir(runtime_dir: Path) -> None:
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
 
-def replace_with_retry(tmp: Path, path: Path) -> None:
+def replace_with_retry(tmp: Path, path: Path, attempts: int = REPLACE_RETRIES) -> None:
     delay = REPLACE_RETRY_DELAY
-    for attempt in range(REPLACE_RETRIES):
+    for attempt in range(attempts):
         try:
             tmp.replace(path)
             return
         except PermissionError:
-            if attempt == REPLACE_RETRIES - 1:
+            if attempt == attempts - 1:
                 raise
             time.sleep(delay)
             delay *= 2
 
 
-def atomic_write_text(path: Path, text: str) -> None:
+def atomic_write_text(path: Path, text: str, *, replace_attempts: int = REPLACE_RETRIES) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    replace_with_retry(tmp, path)
+    replace_with_retry(tmp, path, replace_attempts)
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -59,16 +59,20 @@ def write_outputs(data: Dict[str, Any], runtime_dir: Path) -> None:
     else:
         text = ""
 
-    text_error: OSError | None = None
+    # JSON drives the overlay. An optional OBS text source may hold its file
+    # open on Windows; try that replacement once and retry on the next poll.
+    output_error: OSError | None = None
     try:
-        atomic_write_text(runtime_dir / "nowplaying.txt", text)
+        atomic_write_text(
+            runtime_dir / "nowplaying.json",
+            json.dumps(data, ensure_ascii=False, indent=2),
+        )
     except OSError as exc:
-        text_error = exc
+        output_error = exc
+    try:
+        atomic_write_text(runtime_dir / "nowplaying.txt", text, replace_attempts=1)
+    except OSError as exc:
+        output_error = output_error or exc
 
-    atomic_write_text(
-        runtime_dir / "nowplaying.json",
-        json.dumps(data, ensure_ascii=False, indent=2),
-    )
-
-    if text_error is not None:
-        raise text_error
+    if output_error is not None:
+        raise output_error

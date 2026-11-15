@@ -9,7 +9,7 @@ from apple_music_obs_overlay import cli
 class CliPathTests(TestCase):
     def test_frozen_app_serves_bundled_overlay_and_writes_next_to_exe(self):
         with TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             bundle_dir = root / "_internal"
             exe_dir = root / "dist"
             bundle_dir.mkdir()

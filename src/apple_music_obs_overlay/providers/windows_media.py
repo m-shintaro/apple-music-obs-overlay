@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+import hashlib
 from pathlib import Path
 import platform
+from time import monotonic
 from typing import Any, Dict, Iterable, Tuple
 
 from ..artwork.image import write_runtime_image
-from ..payload import build_payload, default_payload
+from ..payload import build_payload, default_payload, make_track_key, same_track
 from .base import ArtworkResult, BaseProvider
 
 
 WINDOWS_EXTRA_HELP = 'install the Windows extra with: py -3 -m pip install ".[windows]"'
 MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024
+# How long a new album may keep returning the previous cover's exact bytes
+# before that thumbnail is trusted (two albums can legitimately share one).
+STALE_THUMBNAIL_GRACE = 2.0
 
 
 class WindowsMediaUnavailable(RuntimeError):
@@ -25,6 +30,10 @@ class WindowsMediaProvider(BaseProvider):
     def __init__(self, runtime_dir: Path, timeout: float = 5.0) -> None:
         self.runtime_dir = runtime_dir
         self.timeout = timeout
+        # (app id, album, sha256) of the last thumbnail handed out.
+        self._last_thumbnail: Tuple[str, str, bytes] | None = None
+        # (track key, first seen) of a track whose thumbnail looks left over.
+        self._suspect_thumbnail: Tuple[str, float] | None = None
 
     def get_nowplaying(self) -> Dict[str, Any]:
         if platform.system() != "Windows":
@@ -39,13 +48,13 @@ class WindowsMediaProvider(BaseProvider):
         except Exception as exc:
             return default_payload("error", f"windows:{_error_detail(exc)}")
 
-    def get_artwork(self, data: Dict[str, Any]) -> ArtworkResult:
+    def get_artwork(self, data: Dict[str, Any], runtime_dir: Path | None = None) -> ArtworkResult:
         if platform.system() != "Windows":
             return ArtworkResult(error="windows:unsupported_platform")
 
         try:
             image, source, error = asyncio.run(
-                asyncio.wait_for(self._read_thumbnail_bytes(), timeout=self.timeout)
+                asyncio.wait_for(self._read_thumbnail_bytes(data), timeout=self.timeout)
             )
         except WindowsMediaUnavailable as exc:
             return ArtworkResult(error=f"windows:{exc}")
@@ -55,12 +64,36 @@ class WindowsMediaProvider(BaseProvider):
             return ArtworkResult(error=f"windows:thumbnail:{_error_detail(exc)}")
 
         if error:
-            return ArtworkResult(error=error)
+            return ArtworkResult(error=error, track_changed=error == "windows:thumbnail:track_changed")
+        if self._thumbnail_may_be_stale(data, image):
+            return ArtworkResult(error="windows:thumbnail:stale", track_changed=True)
 
-        artwork_file, write_error = write_runtime_image(image, self.runtime_dir, "cover_windows")
+        artwork_file, write_error = write_runtime_image(image, runtime_dir or self.runtime_dir, "cover_windows")
         if artwork_file:
             return ArtworkResult(file=artwork_file, source=source, error="")
         return ArtworkResult(error=f"windows:thumbnail:{write_error}")
+
+    def _thumbnail_may_be_stale(self, data: Dict[str, Any], image: bytes) -> bool:
+        """SMTC can publish a new track's text before its thumbnail.
+
+        The text snapshot then matches while the image still belongs to the
+        previous track. Ask for a prompt retry while a different album keeps
+        returning the previous cover's exact bytes, up to STALE_THUMBNAIL_GRACE.
+        """
+        app = str(data.get("sourceAppId") or "")
+        album = str(data.get("album") or "")
+        digest = hashlib.sha256(image).digest()
+        last = self._last_thumbnail
+        if last is not None and last[0] == app and last[1] != album and last[2] == digest:
+            key = make_track_key(data)
+            now = monotonic()
+            if self._suspect_thumbnail is None or self._suspect_thumbnail[0] != key:
+                self._suspect_thumbnail = (key, now)
+            if now - self._suspect_thumbnail[1] < STALE_THUMBNAIL_GRACE:
+                return True
+        self._suspect_thumbnail = None
+        self._last_thumbnail = (app, album, digest)
+        return False
 
     async def _read_nowplaying(self) -> Dict[str, Any]:
         manager = await self._request_manager()
@@ -78,9 +111,8 @@ class WindowsMediaProvider(BaseProvider):
         except Exception as exc:
             return default_payload("error", f"windows:media_properties:{_error_detail(exc)}")
 
-        title = _text_attr(media, "title")
-        artist = _text_attr(media, "artist") or _text_attr(media, "album_artist")
-        album = _text_attr(media, "album_title")
+        identity = _media_identity(session, media)
+        title, artist, album = identity["title"], identity["artist"], identity["album"]
 
         if not title:
             errors.append("title_unavailable")
@@ -105,7 +137,7 @@ class WindowsMediaProvider(BaseProvider):
         except Exception as exc:
             errors.append(f"timeline_unavailable:{_error_detail(exc)}")
 
-        return build_payload(
+        payload = build_payload(
             status,
             title,
             artist,
@@ -114,8 +146,10 @@ class WindowsMediaProvider(BaseProvider):
             duration,
             error="windows:" + "|".join(errors) if errors else "",
         )
+        payload["sourceAppId"] = identity["sourceAppId"]
+        return payload
 
-    async def _read_thumbnail_bytes(self) -> Tuple[bytes, str, str]:
+    async def _read_thumbnail_bytes(self, expected: Dict[str, Any]) -> Tuple[bytes, str, str]:
         manager = await self._request_manager()
         session = self._select_session(manager)
         if session is None:
@@ -125,6 +159,11 @@ class WindowsMediaProvider(BaseProvider):
             media = await session.try_get_media_properties_async()
         except Exception as exc:
             return b"", "", f"windows:thumbnail:media_properties:{_error_detail(exc)}"
+
+        # A generation token identifies the request, not the media object that
+        # WinRT actually returned. Check the snapshot containing the thumbnail.
+        if not same_track(expected, _media_identity(session, media)):
+            return b"", "", "windows:thumbnail:track_changed"
 
         thumbnail = getattr(media, "thumbnail", None)
         if thumbnail is None:
@@ -154,7 +193,11 @@ class WindowsMediaProvider(BaseProvider):
                 return b"", "", "windows:thumbnail:empty"
 
             reader = api["DataReader"].from_buffer(buffer)
-            return _read_buffer_bytes(reader, length), "smtc", ""
+            image = _read_buffer_bytes(reader, length)
+            current = await session.try_get_media_properties_async()
+            if not same_track(expected, _media_identity(session, current)):
+                return b"", "", "windows:thumbnail:track_changed"
+            return image, "smtc", ""
         except Exception as exc:
             return b"", "", f"windows:thumbnail:{_error_detail(exc)}"
         finally:
@@ -218,6 +261,15 @@ class WindowsMediaProvider(BaseProvider):
         if status == api["PAUSED"]:
             return "paused"
         return "stopped"
+
+
+def _media_identity(session, media) -> Dict[str, str]:
+    return {
+        "title": _text_attr(media, "title"),
+        "artist": _text_attr(media, "artist") or _text_attr(media, "album_artist"),
+        "album": _text_attr(media, "album_title"),
+        "sourceAppId": _text_attr(session, "source_app_user_model_id"),
+    }
 
 
 def _load_media_manager():

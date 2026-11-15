@@ -9,7 +9,7 @@ A lightweight, transparent OBS overlay that shows the track currently playing in
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![OBS](https://img.shields.io/badge/OBS-Browser%20Source-302E31)
-![Dependencies](https://img.shields.io/badge/dependencies-optional%20Windows%20extra-brightgreen)
+![Dependencies](https://img.shields.io/badge/dependencies-Pillow%20%2B%20Windows%20extra-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **English** · [日本語](README.ja.md)
@@ -50,8 +50,9 @@ Windows uses the OS media session API (SMTC) through an optional Python extra.
 - Python 3.9 or later _(not needed for the Windows portable ZIP)_
 - OBS Studio
 
-> macOS does not require additional Python packages. Windows support requires
-> the optional `windows` extra, which installs `winsdk`.
+> Pillow resizes ordinary static artwork to at most 640px without added JPEG compression. Windows support also
+> requires the optional `windows` extra, which installs `winsdk`. Both are bundled in the portable ZIP.
+> Without Pillow the overlay still runs from a clone; artwork is then served at its original size.
 
 ## Quick Start
 
@@ -60,6 +61,7 @@ Clone the repository and start the local server:
 ```bash
 git clone https://github.com/m-shintaro/apple-music-obs-overlay.git
 cd apple-music-obs-overlay
+python3 -m pip install .
 python3 nowplaying.py
 ```
 
@@ -208,6 +210,10 @@ Disable the network fallback entirely:
 python3 nowplaying.py --no-network-artwork
 ```
 
+Artwork lookup runs one job at a time while track metadata continues updating.
+Published artwork versions are hashes of the normalized image, so tracks sharing a
+cover reuse the same image. Color profiles and transparency are preserved; animated covers and 16-bit grayscale PNGs retain their original data.
+
 ## Generated Files
 
 While running, the tool writes the following files into `runtime/`:
@@ -216,9 +222,8 @@ While running, the tool writes the following files into `runtime/`:
 | -------------------- | -------------------------------------------------- |
 | `nowplaying.json`    | Track data consumed by the Browser Source          |
 | `nowplaying.txt`     | Plain-text output, usable as an OBS Text Source    |
-| `cover_direct.*`     | Artwork exported directly from Music.app           |
-| `cover_windows.*`    | Artwork exported from Windows SMTC thumbnail data  |
-| `cover_fallback.jpg` | Artwork fetched via the iTunes Search API fallback |
+| `cover_<sha256>.*` | Up to 8 recent covers; static covers up to 640px (original JPEG or lossless PNG), or original animated/high-bit-depth covers |
+| `cover_direct.*`, `cover_windows.*` | Raw provider images written only by `--diagnose-artwork` |
 
 > Everything under `runtime/` is ignored by `.gitignore`.
 

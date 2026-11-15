@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Dict
 
@@ -45,6 +46,7 @@ def default_payload(state: str = "stopped", error: str = "") -> Payload:
         "artworkVersion": "",
         "artworkSource": "",
         "artworkError": "",
+        "artworkPending": False,
         "updatedAt": time.time(),
         "error": error,
     }
@@ -76,17 +78,18 @@ def build_payload(
         "artworkVersion": "",
         "artworkSource": "",
         "artworkError": "",
+        "artworkPending": False,
         "updatedAt": time.time(),
         "error": error,
     }
 
 
 def make_track_key(data: Payload) -> str:
-    return "|".join(
-        [
-            str(data.get("title", "")),
-            str(data.get("artist", "")),
-            str(data.get("album", "")),
-            str(data.get("duration", 0)),
-        ]
-    )
+    return json.dumps([str(data.get(key) or "") for key in
+                       ("title", "artist", "album", "sourceAppId", "trackId")])
+
+
+def same_track(expected: Payload, observed: Payload) -> bool:
+    keys = ["title", "artist", "album"]
+    keys.extend(key for key in ("sourceAppId", "trackId") if expected.get(key))
+    return all(str(expected.get(key) or "") == str(observed.get(key) or "") for key in keys)

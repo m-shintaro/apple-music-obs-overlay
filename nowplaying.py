@@ -2,7 +2,13 @@
 """Compatibility entry point for the OBS now-playing overlay."""
 
 from pathlib import Path
+import multiprocessing
 import sys
+
+
+if __name__ == "__main__":
+    # PyInstaller workers must dispatch before importing/parsing the app CLI.
+    multiprocessing.freeze_support()
 
 
 APP_DIR = Path(__file__).resolve().parent
