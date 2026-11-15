@@ -91,7 +91,7 @@ test('text animation cannot restore an old playback state or position',async()=>
  h.sandbox.NP.update(track({key:'New',current:42,state:'paused',art:''}));
  await h.advance(1000);
  assert.equal(h.element('cur').textContent,'0:42');
- assert.equal(h.element('filled').style.transform,'scaleX(0.175)');
+ assert.equal(h.element('filled').style.clipPath,'inset(0 82.5% 0 0 round 3px)');
 });
 
 test('progress updates text only when displayed seconds change',async()=>{

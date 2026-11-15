@@ -57,7 +57,7 @@ class PollerTests(TestCase):
             with mock.patch.object(poller, 'write_outputs', side_effect=write):
                 poller.poll_loop(stop, provider, root, .005, 'JP', network)
             self.assertTrue(predicate(captured[-1]), captured[-1])
-            covers = {p.name: p.read_bytes() for p in root.glob('cover_*.jpg')}
+            covers = {p.name: p.read_bytes() for p in root.glob('cover_*.*')}
         return captured, covers
 
     def test_retries_provider_artwork(self):

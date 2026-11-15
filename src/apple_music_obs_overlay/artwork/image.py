@@ -7,24 +7,57 @@ from typing import Tuple
 
 from ..output import atomic_write_bytes
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageCms, ImageOps
 
 
-# Covers render at 104px, up to 312px at the maximum supported scale.
-MAX_ARTWORK_SIZE = 320
+# 104 CSS pixels at scale=3, with 2x sampling for crisp artwork.
+MAX_ARTWORK_SIZE = 640
 
 
 def normalize_artwork(data: bytes) -> bytes:
-    """Return a bounded, static JPEG; never retain animated or full-size covers."""
+    """Bound static covers without lossy re-encoding; preserve animated originals."""
     with Image.open(BytesIO(data)) as image:
+        if getattr(image, "is_animated", False):
+            return data
+        # Pillow's RGBA conversion clips 16-bit grayscale to 8-bit white. Keep
+        # its original PNG encoding so the browser can display it correctly.
+        if image.format == "PNG" and image.mode in ("I", "I;16", "I;16B", "I;16L"):
+            return data
+        # Preserve the browser's JPEG decoding (including chroma downsampling),
+        # orientation and color profile when no size reduction is needed.
+        if image.format == "JPEG" and max(image.size) <= MAX_ARTWORK_SIZE:
+            return data
         image.seek(0)
+        icc = image.info.get("icc_profile")
         image = ImageOps.exif_transpose(image)
-        image.thumbnail((MAX_ARTWORK_SIZE, MAX_ARTWORK_SIZE), Image.Resampling.LANCZOS)
+        # PNG cannot carry CMYK/Lab pixels. Convert those through their profile;
+        # RGB profiles (including Display P3) can be preserved without clipping.
+        if icc and image.mode in ("CMYK", "LAB"):
+            target = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
+            try:
+                image = ImageCms.profileToProfile(
+                    image, ImageCms.ImageCmsProfile(BytesIO(icc)), target, outputMode="RGB"
+                )
+                icc = target.tobytes()
+            except (OSError, ValueError, ImageCms.PyCMSError):
+                if image.mode != "CMYK":
+                    raise
+                image = image.convert("RGB")
+                icc = None
+        elif icc and image.mode in ("L", "LA"):
+            # Keep grayscale pixels paired with their grayscale profile.
+            if image.mode == "L" and "transparency" in image.info:
+                image = image.convert("LA")
+            image.thumbnail((MAX_ARTWORK_SIZE, MAX_ARTWORK_SIZE), Image.Resampling.LANCZOS)
+            image.info.clear()
+            out = BytesIO()
+            image.save(out, "PNG", icc_profile=icc)
+            return out.getvalue()
         rgba = image.convert("RGBA")
-        background = Image.new("RGB", rgba.size, (22, 22, 24))
-        background.paste(rgba, mask=rgba.getchannel("A"))
+        rgba.thumbnail((MAX_ARTWORK_SIZE, MAX_ARTWORK_SIZE), Image.Resampling.LANCZOS)
+        rgba.info.clear()
         out = BytesIO()
-        background.save(out, "JPEG", quality=85)
+        rgba.save(out, "PNG", icc_profile=icc)
         return out.getvalue()
 
 

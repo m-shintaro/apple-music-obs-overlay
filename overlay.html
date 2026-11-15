@@ -75,9 +75,9 @@
     position: relative;
     width: 720px;
     border-radius: var(--radius-card);
-    box-shadow:
-      0 30px 38px rgba(0,0,0,0.42),
-      0 12px 18px rgba(0,0,0,0.26);
+    filter:
+      drop-shadow(0 30px 38px rgba(0,0,0,0.42))
+      drop-shadow(0 12px 18px rgba(0,0,0,0.26));
     opacity: 0;
     transform: translateY(14px) scale(0.985);
     animation: rise 0.7s cubic-bezier(0.22,0.61,0.36,1) forwards;
@@ -279,11 +279,9 @@
     position: absolute;
     inset: 0 auto 0 0;
     width: 100%;
-    transform: scaleX(0.135);
-    transform-origin: left center;
+    clip-path: inset(0 86.5% 0 0 round 3px);
     background: var(--fill);
-    border-radius: 3px;
-    transition: transform 0.1s linear;
+    transition: clip-path 0.1s linear;
   }
 
   @keyframes rise {
@@ -438,8 +436,8 @@ const NowPlaying = (() => {
       ? Math.max(0, Math.min(100, (displayCurrent / safeDuration) * 100))
       : 0;
 
-    const transform = `scaleX(${pct / 100})`;
-    if (filled.style.transform !== transform) filled.style.transform = transform;
+    const clip = `inset(0 ${100 - pct}% 0 0 round 3px)`;
+    if (filled.style.clipPath !== clip) filled.style.clipPath = clip;
     const currentText = fmt(displayCurrent);
     const durationText = fmt(safeDuration);
     if ($("cur").textContent !== currentText) $("cur").textContent = currentText;

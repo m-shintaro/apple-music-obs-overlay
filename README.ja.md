@@ -51,7 +51,7 @@ Windows はオプションの Python extra 経由で OS のメディアセッシ
 - Python 3.9 以降 _(Windows ポータブル ZIP では不要)_
 - OBS Studio
 
-> ジャケット画像を最大320pxの静止JPEGに揃えるため Pillow を使用します。Windows では
+> 通常の静止ジャケットを追加のJPEG圧縮なしで最大640pxに縮小するため Pillow を使用します。Windows では
 > `winsdk` をインストールする `windows` extra も必要です。ポータブル ZIP には同梱されています。
 
 ## Quick Start
@@ -212,7 +212,7 @@ python3 nowplaying.py --no-network-artwork
 ```
 
 ジャケット取得は同時1件で実行し、取得中も曲情報を更新します。画像のバージョンには
-縮小後の内容ハッシュを使い、同じジャケットは再利用します。アニメーション画像は先頭フレームを使用します。
+縮小後の内容ハッシュを使い、同じジャケットは再利用します。色プロファイルと透明度を保持し、アニメーション画像と16bitグレースケールPNGは元データをそのまま使用します。
 
 ## Generated Files
 
@@ -222,7 +222,7 @@ python3 nowplaying.py --no-network-artwork
 | -------------------- | ------------------------------------------------ |
 | `nowplaying.json`    | Browser Source が読み込む曲情報                  |
 | `nowplaying.txt`     | OBS Text Source でも使える簡易テキスト出力       |
-| `cover_<sha256>.jpg` | 最大320pxの静止ジャケット画像。内容ハッシュで命名し、直近8枚まで保持 |
+| `cover_<sha256>.*` | 最大640pxの静止画（元JPEGまたは可逆PNG）、または元のアニメーション・高ビット深度画像。内容ハッシュで命名し、直近8枚まで保持 |
 | `cover_direct.*`, `cover_windows.*` | `--diagnose-artwork` 実行時のみ出力する元画像 |
 
 > `runtime/` 配下の生成物はすべて `.gitignore` で除外されます。

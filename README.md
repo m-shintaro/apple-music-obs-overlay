@@ -50,7 +50,7 @@ Windows uses the OS media session API (SMTC) through an optional Python extra.
 - Python 3.9 or later _(not needed for the Windows portable ZIP)_
 - OBS Studio
 
-> Pillow normalizes artwork to static JPEG images up to 320px. Windows support also
+> Pillow resizes ordinary static artwork to at most 640px without added JPEG compression. Windows support also
 > requires the optional `windows` extra, which installs `winsdk`. Both are bundled in the portable ZIP.
 
 ## Quick Start
@@ -211,7 +211,7 @@ python3 nowplaying.py --no-network-artwork
 
 Artwork lookup runs one job at a time while track metadata continues updating.
 Published artwork versions are hashes of the normalized image, so tracks sharing a
-cover reuse the same image. Animated covers use their first frame.
+cover reuse the same image. Color profiles and transparency are preserved; animated covers and 16-bit grayscale PNGs retain their original data.
 
 ## Generated Files
 
@@ -221,7 +221,7 @@ While running, the tool writes the following files into `runtime/`:
 | -------------------- | -------------------------------------------------- |
 | `nowplaying.json`    | Track data consumed by the Browser Source          |
 | `nowplaying.txt`     | Plain-text output, usable as an OBS Text Source    |
-| `cover_<sha256>.jpg` | Up to 8 recent static covers, at most 320px; immutable content filenames |
+| `cover_<sha256>.*` | Up to 8 recent covers; static covers up to 640px (original JPEG or lossless PNG), or original animated/high-bit-depth covers |
 | `cover_direct.*`, `cover_windows.*` | Raw provider images written only by `--diagnose-artwork` |
 
 > Everything under `runtime/` is ignored by `.gitignore`.

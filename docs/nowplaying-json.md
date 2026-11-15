@@ -20,8 +20,8 @@ ignore unknown fields for forward compatibility.
   "positionText": "0:42",
   "durationText": "3:34",
   "progress": 0.1985981308,
-  "artworkFile": "cover_<sha256>.jpg",
-  "artworkVersion": "<sha256-of-normalized-jpeg>",
+  "artworkFile": "cover_<sha256>.png",
+  "artworkVersion": "<sha256-of-published-image>",
   "artworkSource": "music",
   "artworkError": "",
   "artworkPending": false,
@@ -44,7 +44,7 @@ ignore unknown fields for forward compatibility.
 | `durationText` | string | Display-ready `M:SS` text for `duration`. |
 | `progress` | number | `position / duration`, clamped from `0` to `1`. |
 | `artworkFile` | string | Artwork filename inside `runtime/`, or empty when unavailable. |
-| `artworkVersion` | string | SHA-256 of the normalized static JPEG, or empty while artwork is unavailable. Changes only when image content changes. |
+| `artworkVersion` | string | SHA-256 of the published image bytes, or empty while artwork is unavailable. Changes only when image content changes. |
 | `artworkSource` | string | Artwork source such as `music`, `smtc`, or `itunes`. |
 | `artworkError` | string | Last artwork retrieval error. Empty when artwork was found or no lookup was attempted. |
 | `artworkPending` | boolean | Artwork lookup is pending. The overlay retains its visible cover until the lookup completes, avoiding placeholder flashes between tracks sharing artwork. Missing means false for compatibility. |
@@ -57,5 +57,5 @@ ignore unknown fields for forward compatibility.
 - Windows uses the OS media session API (SMTC) through the optional `winsdk` dependency.
 - Demo mode writes sample playback data and does not attempt artwork lookup.
 - Artwork is fetched asynchronously; metadata may arrive first with empty artwork fields.
-- Published images are static JPEGs up to 320px with content-based filenames. The cache retains up to 8 recent covers; files temporarily locked by Windows readers are retried for deletion on the next publication.
+- Ordinary static images are at most 640px, preserving color profiles and transparency. JPEGs already within that size retain their original bytes; other static images use lossless PNG. Animated images and 16-bit grayscale PNGs retain their original bytes and dimensions. All use content-based filenames. The cache retains up to 8 recent covers; files temporarily locked by Windows readers are retried for deletion on the next publication.
 - Missing metadata or artwork should be reported in `error` or `artworkError`; it should not stop the HTTP server.
