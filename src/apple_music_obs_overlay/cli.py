@@ -196,5 +196,9 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    serve(args.port, args.bind, APP_DIR, RUNTIME_DIR)
+    try:
+        serve(args.port, args.bind, APP_DIR, RUNTIME_DIR)
+    finally:
+        stop_event.set()
+        poller.join(timeout=2.5)
     return 0

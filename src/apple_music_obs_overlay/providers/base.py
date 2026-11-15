@@ -10,6 +10,7 @@ class ArtworkResult:
     file: str = ""
     source: str = ""
     error: str = ""
+    track_changed: bool = False
 
 
 class NowPlayingProvider(Protocol):

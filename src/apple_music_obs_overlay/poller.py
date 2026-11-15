@@ -34,47 +34,52 @@ def poll_loop(
     provider_found = False
     is_demo = isinstance(provider, DemoProvider)
 
-    while not stop_event.is_set():
-        data = _safe_nowplaying(provider)
-        playable = data.get("state") in ("playing", "paused")
-        track_key = make_track_key(data) if playable else ""
-        if track_key != last_track_key:
-            generation += 1
-            last_track_key = track_key
-            artwork_file = artwork_version = artwork_source = artwork_error = ""
-            last_attempt_at = None
-            network_attempted = provider_found = False
+    try:
+        while not stop_event.is_set():
+            data = _safe_nowplaying(provider)
+            playable = data.get("state") in ("playing", "paused")
+            track_key = make_track_key(data) if playable else ""
+            if track_key != last_track_key:
+                worker.cancel()
+                generation += 1
+                last_track_key = track_key
+                artwork_file = artwork_version = artwork_source = artwork_error = ""
+                last_attempt_at = None
+                network_attempted = provider_found = False
 
-        result = worker.take_result()
-        if result is not None and result.generation == generation and playable:
-            # Retry five seconds after completion, not after the start of a slow job.
-            last_attempt_at = time.monotonic()
-            if result.image:
-                try:
-                    artwork_file, artwork_version = cache.publish(result.image)
-                    artwork_source, artwork_error = result.source, ""
-                    provider_found = result.provider_found
-                except OSError as exc:
-                    artwork_error = f"artwork:publish:{exc}"
-            elif not artwork_file:
-                artwork_error = result.error
+            result = worker.take_result()
+            if result is not None and result.generation == generation and playable:
+                # A sampled track mismatch needs a fresh snapshot immediately;
+                # other misses retry five seconds after completion.
+                last_attempt_at = None if result.track_changed else time.monotonic()
+                network_attempted = network_attempted or result.network_attempted
+                if result.image:
+                    try:
+                        artwork_file, artwork_version = cache.publish(result.image)
+                        artwork_source, artwork_error = result.source, ""
+                        provider_found = result.provider_found
+                    except OSError as exc:
+                        artwork_error = f"artwork:publish:{exc}"
+                elif not artwork_file:
+                    artwork_error = result.error
 
-        if playable:
-            data.update(artworkFile=artwork_file, artworkVersion=artwork_version,
-                        artworkSource=artwork_source, artworkError=artwork_error,
-                        artworkPending=not is_demo and (last_attempt_at is None or worker.busy))
+            if playable:
+                data.update(artworkFile=artwork_file, artworkVersion=artwork_version,
+                            artworkSource=artwork_source, artworkError=artwork_error,
+                            artworkPending=not is_demo and (last_attempt_at is None or worker.busy))
 
-        # Metadata keeps moving while the single artwork worker is busy.
-        _safe_write_outputs(data, runtime_dir)
-        now = time.monotonic()
-        if (not stop_event.is_set() and playable and not is_demo and not worker.busy and
-                (last_attempt_at is None or
-                 (not provider_found and now - last_attempt_at >= ARTWORK_RETRY_INTERVAL))):
-            network = allow_network_artwork and not network_attempted
-            network_attempted = network_attempted or network
-            last_attempt_at = now
-            worker.start(generation, data, network)
-        stop_event.wait(interval)
+            # Metadata keeps moving while the single artwork worker is busy.
+            _safe_write_outputs(data, runtime_dir)
+            now = time.monotonic()
+            if (not stop_event.is_set() and playable and not is_demo and not worker.busy and
+                    (last_attempt_at is None or
+                     (not provider_found and now - last_attempt_at >= ARTWORK_RETRY_INTERVAL))):
+                network = allow_network_artwork and not network_attempted
+                last_attempt_at = now
+                worker.start(generation, data, network)
+            stop_event.wait(interval)
+    finally:
+        worker.close()
 
 
 def _safe_nowplaying(provider: NowPlayingProvider) -> Dict[str, Any]:

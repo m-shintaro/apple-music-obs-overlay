@@ -7,7 +7,7 @@ import platform
 from typing import Any, Dict, Iterable, Tuple
 
 from ..artwork.image import write_runtime_image
-from ..payload import build_payload, default_payload
+from ..payload import build_payload, default_payload, same_track
 from .base import ArtworkResult, BaseProvider
 
 
@@ -45,7 +45,7 @@ class WindowsMediaProvider(BaseProvider):
 
         try:
             image, source, error = asyncio.run(
-                asyncio.wait_for(self._read_thumbnail_bytes(), timeout=self.timeout)
+                asyncio.wait_for(self._read_thumbnail_bytes(data), timeout=self.timeout)
             )
         except WindowsMediaUnavailable as exc:
             return ArtworkResult(error=f"windows:{exc}")
@@ -55,7 +55,7 @@ class WindowsMediaProvider(BaseProvider):
             return ArtworkResult(error=f"windows:thumbnail:{_error_detail(exc)}")
 
         if error:
-            return ArtworkResult(error=error)
+            return ArtworkResult(error=error, track_changed=error == "windows:thumbnail:track_changed")
 
         artwork_file, write_error = write_runtime_image(image, runtime_dir or self.runtime_dir, "cover_windows")
         if artwork_file:
@@ -78,9 +78,8 @@ class WindowsMediaProvider(BaseProvider):
         except Exception as exc:
             return default_payload("error", f"windows:media_properties:{_error_detail(exc)}")
 
-        title = _text_attr(media, "title")
-        artist = _text_attr(media, "artist") or _text_attr(media, "album_artist")
-        album = _text_attr(media, "album_title")
+        identity = _media_identity(session, media)
+        title, artist, album = identity["title"], identity["artist"], identity["album"]
 
         if not title:
             errors.append("title_unavailable")
@@ -105,7 +104,7 @@ class WindowsMediaProvider(BaseProvider):
         except Exception as exc:
             errors.append(f"timeline_unavailable:{_error_detail(exc)}")
 
-        return build_payload(
+        payload = build_payload(
             status,
             title,
             artist,
@@ -114,8 +113,10 @@ class WindowsMediaProvider(BaseProvider):
             duration,
             error="windows:" + "|".join(errors) if errors else "",
         )
+        payload["sourceAppId"] = identity["sourceAppId"]
+        return payload
 
-    async def _read_thumbnail_bytes(self) -> Tuple[bytes, str, str]:
+    async def _read_thumbnail_bytes(self, expected: Dict[str, Any]) -> Tuple[bytes, str, str]:
         manager = await self._request_manager()
         session = self._select_session(manager)
         if session is None:
@@ -125,6 +126,11 @@ class WindowsMediaProvider(BaseProvider):
             media = await session.try_get_media_properties_async()
         except Exception as exc:
             return b"", "", f"windows:thumbnail:media_properties:{_error_detail(exc)}"
+
+        # A generation token identifies the request, not the media object that
+        # WinRT actually returned. Check the snapshot containing the thumbnail.
+        if not same_track(expected, _media_identity(session, media)):
+            return b"", "", "windows:thumbnail:track_changed"
 
         thumbnail = getattr(media, "thumbnail", None)
         if thumbnail is None:
@@ -154,7 +160,11 @@ class WindowsMediaProvider(BaseProvider):
                 return b"", "", "windows:thumbnail:empty"
 
             reader = api["DataReader"].from_buffer(buffer)
-            return _read_buffer_bytes(reader, length), "smtc", ""
+            image = _read_buffer_bytes(reader, length)
+            current = await session.try_get_media_properties_async()
+            if not same_track(expected, _media_identity(session, current)):
+                return b"", "", "windows:thumbnail:track_changed"
+            return image, "smtc", ""
         except Exception as exc:
             return b"", "", f"windows:thumbnail:{_error_detail(exc)}"
         finally:
@@ -218,6 +228,15 @@ class WindowsMediaProvider(BaseProvider):
         if status == api["PAUSED"]:
             return "paused"
         return "stopped"
+
+
+def _media_identity(session, media) -> Dict[str, str]:
+    return {
+        "title": _text_attr(media, "title"),
+        "artist": _text_attr(media, "artist") or _text_attr(media, "album_artist"),
+        "album": _text_attr(media, "album_title"),
+        "sourceAppId": _text_attr(session, "source_app_user_model_id"),
+    }
 
 
 def _load_media_manager():

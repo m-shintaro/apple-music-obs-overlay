@@ -18,6 +18,8 @@ class ArtworkJobResult:
     source: str = ""
     error: str = ""
     provider_found: bool = False
+    track_changed: bool = False
+    network_attempted: bool = False
 
 
 class ArtworkWorker:
@@ -32,6 +34,7 @@ class ArtworkWorker:
         self.country = country
         self.thread: threading.Thread | None = None
         self.result: ArtworkJobResult | None = None
+        self.cancel_event = threading.Event()
 
     @property
     def busy(self) -> bool:
@@ -40,11 +43,22 @@ class ArtworkWorker:
     def start(self, generation: int, data: Dict[str, Any], network: bool) -> None:
         if self.busy:
             raise RuntimeError("artwork job already running")
+        self.cancel_event = threading.Event()
         self.thread = threading.Thread(
             target=self._run, args=(generation, dict(data), network), daemon=True,
             name="overlay-artwork",
         )
         self.thread.start()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def close(self) -> None:
+        self.cancel()
+        if self.thread is not None:
+            # Network jobs terminate immediately; native APIs keep their own
+            # existing timeouts. Do not hold application shutdown indefinitely.
+            self.thread.join(timeout=2)
 
     def take_result(self) -> ArtworkJobResult | None:
         if self.thread is None or self.thread.is_alive():
@@ -61,7 +75,12 @@ class ArtworkWorker:
                 scratch = Path(tmp)
                 try:
                     artwork = self.provider.get_artwork(data, runtime_dir=scratch)
+                    if self.cancel_event.is_set():
+                        return
                     result.error = artwork.error
+                    result.track_changed = artwork.track_changed
+                    if artwork.track_changed:
+                        return
                     if artwork.file:
                         result.image = normalize_artwork((scratch / artwork.file).read_bytes())
                         result.source = artwork.source
@@ -69,8 +88,12 @@ class ArtworkWorker:
                         result.error = ""
                 except Exception as exc:
                     result.error = f"{self.provider.name}:artwork:{exc}"
-                if not result.image and network:
-                    file, error = fetch_artwork_from_itunes_search(data, scratch, self.country)
+                if not result.image and network and not self.cancel_event.is_set():
+                    result.network_attempted = True
+                    file, error = fetch_artwork_from_itunes_search(
+                        data, scratch, self.country, cancel_event=self.cancel_event)
+                    if self.cancel_event.is_set():
+                        return
                     if file:
                         result.image = normalize_artwork((scratch / file).read_bytes())
                         result.source = "itunes"
@@ -79,4 +102,8 @@ class ArtworkWorker:
                         result.error = error
         except Exception as exc:
             result.error = f"artwork:{exc}"
-        self.result = result
+        finally:
+            if self.cancel_event.is_set():
+                result.image = b""
+                result.error = "artwork:cancelled"
+            self.result = result

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Dict
 
@@ -84,10 +85,11 @@ def build_payload(
 
 
 def make_track_key(data: Payload) -> str:
-    return "|".join(
-        [
-            str(data.get("title", "")),
-            str(data.get("artist", "")),
-            str(data.get("album", "")),
-        ]
-    )
+    return json.dumps([str(data.get(key) or "") for key in
+                       ("title", "artist", "album", "sourceAppId", "trackId")])
+
+
+def same_track(expected: Payload, observed: Payload) -> bool:
+    keys = ["title", "artist", "album"]
+    keys.extend(key for key in ("sourceAppId", "trackId") if expected.get(key))
+    return all(str(expected.get(key) or "") == str(observed.get(key) or "") for key in keys)

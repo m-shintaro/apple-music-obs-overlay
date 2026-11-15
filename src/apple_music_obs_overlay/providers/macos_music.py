@@ -65,6 +65,7 @@ NOWPLAYING_SCRIPT = r'''
     title: text(() => track.name()),
     artist: text(() => track.artist()),
     album: text(() => track.album()),
+    trackId: text(() => track.persistentID()),
     position: seconds(() => Music.playerPosition()),
     duration: seconds(() => track.duration())
   });
@@ -77,6 +78,31 @@ ObjC.import("Foundation");
 
 function run(argv) {
   const outPath = argv[0];
+  const expected = JSON.parse(argv[1]);
+
+  function text(read) {
+    try {
+      const value = read();
+      return value == null ? "" : String(value);
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function identity(track) {
+    return {
+      title: text(() => track.name()),
+      artist: text(() => track.artist()),
+      album: text(() => track.album()),
+      trackId: text(() => track.persistentID())
+    };
+  }
+
+  function matches(actual, wanted) {
+    const keys = ["title", "artist", "album"];
+    if (wanted.trackId) keys.push("trackId");
+    return keys.every(key => actual[key] === String(wanted[key] || ""));
+  }
 
   function message(error) {
     if (!error) {
@@ -150,6 +176,9 @@ function run(argv) {
     return `missing:current_track:${message(error)}`;
   }
 
+  const sampled = identity(track);
+  if (!matches(sampled, expected)) return "missing:track_changed";
+
   const artworkResult = artworkCandidates(track);
   if (!artworkResult.candidates.length) {
     return `missing:no_artworks:${artworkResult.errors.join("|")}`;
@@ -164,6 +193,12 @@ function run(argv) {
         if (!nsData || Number(nsData.length) === 0) {
           attempts.push(`${candidate.source}.${getterName}:empty`);
           continue;
+        }
+        // JXA references can resolve again on each Apple Event. Recheck after
+        // exporting, including persistent ID when available, before writing.
+        if (!matches(identity(track), sampled) ||
+            !matches(identity(Music.currentTrack()), sampled)) {
+          return "missing:track_changed";
         }
         const ok = nsData.writeToFileAtomically($(outPath), true);
         if (ok) {
@@ -209,7 +244,7 @@ class MacOSMusicProvider(BaseProvider):
         except json.JSONDecodeError:
             return default_payload("error", result.stdout.strip() or result.stderr.strip())
 
-        return build_payload(
+        data = build_payload(
             str(payload.get("state") or "stopped"),
             str(payload.get("title") or ""),
             str(payload.get("artist") or ""),
@@ -217,20 +252,24 @@ class MacOSMusicProvider(BaseProvider):
             safe_float(payload.get("position") or 0),
             safe_float(payload.get("duration") or 0),
         )
+        data["trackId"] = str(payload.get("trackId") or "")
+        return data
 
     def get_artwork(self, data: Dict[str, Any], runtime_dir: Path | None = None) -> ArtworkResult:
-        artwork_file, status = self._export_artwork_from_music(runtime_dir or self.runtime_dir)
+        artwork_file, status = self._export_artwork_from_music(data, runtime_dir or self.runtime_dir)
         if artwork_file:
             return ArtworkResult(file=artwork_file, source="music", error="")
-        return ArtworkResult(error=status)
+        return ArtworkResult(error=status, track_changed=status == "missing:track_changed")
 
-    def _export_artwork_from_music(self, runtime_dir: Path) -> Tuple[str, str]:
+    def _export_artwork_from_music(self, data: Dict[str, Any], runtime_dir: Path) -> Tuple[str, str]:
         raw_path = runtime_dir / "cover_direct.raw"
         raw_path.unlink(missing_ok=True)
 
         try:
             result = subprocess.run(
-                ["osascript", "-l", "JavaScript", "-e", ARTWORK_SCRIPT, str(raw_path)],
+                ["osascript", "-l", "JavaScript", "-e", ARTWORK_SCRIPT, str(raw_path),
+                 json.dumps({key: data.get(key) or "" for key in
+                             ("title", "artist", "album", "trackId")})],
                 text=True,
                 capture_output=True,
                 timeout=8,

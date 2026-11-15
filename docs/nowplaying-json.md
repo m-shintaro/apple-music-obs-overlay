@@ -38,6 +38,8 @@ ignore unknown fields for forward compatibility.
 | `title` | string | Track title, or an empty string when unavailable. |
 | `artist` | string | Track artist, or an empty string when unavailable. |
 | `album` | string | Album title, or an empty string when unavailable. |
+| `trackId` | string | Optional macOS Music persistent track ID. Used to correlate artwork with its track; unavailable IDs are empty. |
+| `sourceAppId` | string | Optional Windows media-session app ID. Prevents adopting a different app's cover for otherwise identical metadata. |
 | `position` | number | Current playback position in seconds. |
 | `duration` | number | Track duration in seconds. |
 | `positionText` | string | Display-ready `M:SS` text for `position`. |
@@ -57,5 +59,8 @@ ignore unknown fields for forward compatibility.
 - Windows uses the OS media session API (SMTC) through the optional `winsdk` dependency.
 - Demo mode writes sample playback data and does not attempt artwork lookup.
 - Artwork is fetched asynchronously; metadata may arrive first with empty artwork fields.
+- Native artwork is accepted only when its sampled track matches the requested metadata. A mismatch is retried on the next poll without consuming the network fallback attempt.
+- The iTunes fallback has a 5-second total deadline, including search and image download, and is cancelled when the track changes. Native providers retain their own API timeouts.
+- JSON is written before the optional text output. A locked text file is retried on the next poll without delaying JSON through replacement backoff.
 - Ordinary static images are at most 640px, preserving color profiles and transparency. JPEGs already within that size retain their original bytes; other static images use lossless PNG. Animated images and 16-bit grayscale PNGs retain their original bytes and dimensions. All use content-based filenames. The cache retains up to 8 recent covers; files temporarily locked by Windows readers are retried for deletion on the next publication.
 - Missing metadata or artwork should be reported in `error` or `artworkError`; it should not stop the HTTP server.

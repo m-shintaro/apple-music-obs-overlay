@@ -13,6 +13,7 @@ from apple_music_obs_overlay.artwork import worker
 from apple_music_obs_overlay.artwork.image import normalize_artwork
 from apple_music_obs_overlay.payload import build_payload, make_track_key
 from apple_music_obs_overlay.providers.base import ArtworkResult
+from test_itunes import LocalArtworkServer
 
 
 def image_bytes(color='red'):
@@ -42,6 +43,64 @@ class Provider:
 
 
 class PollerTests(TestCase):
+    def test_changed_provider_snapshot_retries_promptly_without_using_network_attempt(self):
+        provider = Provider()
+        def artwork(data, runtime_dir=None):
+            provider.calls += 1
+            if provider.calls == 1:
+                return ArtworkResult(error='track_changed', track_changed=True)
+            return ArtworkResult(error='not_ready')
+        provider.get_artwork = artwork
+        def fallback(data, root, country, cancel_event=None):
+            self.assertEqual(provider.calls, 2)
+            (root / 'fallback.png').write_bytes(image_bytes('blue'))
+            return 'fallback.png', ''
+        with mock.patch.object(worker, 'fetch_artwork_from_itunes_search', side_effect=fallback) as fetch:
+            data, _ = self.run_until(provider, lambda d: d['artworkSource'] == 'itunes', True)
+        self.assertEqual(provider.calls, 2)
+        fetch.assert_called_once()
+        self.assertTrue(any(d['artworkPending'] and d['artworkError'] == 'track_changed' for d in data))
+
+    def test_track_change_cancels_old_network_job_before_loading_new_native_cover(self):
+        provider = Provider()
+        original = provider.get_artwork
+        def artwork(data, runtime_dir=None):
+            if data['title'] == 'Song':
+                return ArtworkResult(error='missing')
+            return original(data, runtime_dir)
+        provider.get_artwork = artwork
+        changed = []
+        with LocalArtworkServer('body') as server:
+            def done(data):
+                if server.entered.is_set() and not changed:
+                    changed.append(time.monotonic())
+                    provider.title = 'New Song'
+                if data['title'] == 'New Song' and data['artworkFile']:
+                    self.assertLess(time.monotonic() - changed[0], 1.5)
+                    self.assertEqual(data['artworkSource'], 'test')
+                    return True
+                return False
+            _, covers = self.run_until(provider, done, True)
+        self.assertEqual(len(covers), 1)
+        self.assertEqual(next(iter(covers.values())), normalize_artwork(image_bytes()))
+
+    def test_stopping_poller_cancels_and_reaps_in_flight_download(self):
+        import multiprocessing
+        provider = Provider()
+        provider.get_artwork = lambda *args, **kwargs: ArtworkResult(error='missing')
+        children = {p.pid for p in multiprocessing.active_children()}
+        with LocalArtworkServer('body') as server:
+            self.run_until(provider, lambda d: server.entered.is_set(), True)
+            self.assertEqual({p.pid for p in multiprocessing.active_children()}, children)
+
+    def test_track_identity_avoids_delimiter_collisions_and_uses_provider_ids(self):
+        self.assertNotEqual(make_track_key({'title': 'A|B', 'artist': 'C'}),
+                            make_track_key({'title': 'A', 'artist': 'B|C'}))
+        self.assertNotEqual(make_track_key({'title': 'A', 'trackId': 'one'}),
+                            make_track_key({'title': 'A', 'trackId': 'two'}))
+        self.assertNotEqual(make_track_key({'title': 'A', 'sourceAppId': 'one'}),
+                            make_track_key({'title': 'A', 'sourceAppId': 'two'}))
+
     def run_until(self, provider, predicate, network=False):
         stop = threading.Event()
         captured = []
@@ -70,7 +129,7 @@ class PollerTests(TestCase):
 
     def test_retries_provider_after_fallback_without_repeating_network(self):
         provider = Provider(fail_first=True)
-        def fallback(data, root, country):
+        def fallback(data, root, country, cancel_event=None):
             (root / 'fallback.png').write_bytes(image_bytes('blue'))
             return 'fallback.png', ''
         with mock.patch.object(poller, 'ARTWORK_RETRY_INTERVAL', .01):
