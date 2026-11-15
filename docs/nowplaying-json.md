@@ -20,10 +20,11 @@ ignore unknown fields for forward compatibility.
   "positionText": "0:42",
   "durationText": "3:34",
   "progress": 0.1985981308,
-  "artworkFile": "cover_direct.jpg",
-  "artworkVersion": "Song Title|Artist Name|Album Name|214",
+  "artworkFile": "cover_<sha256>.jpg",
+  "artworkVersion": "<sha256-of-normalized-jpeg>",
   "artworkSource": "music",
   "artworkError": "",
+  "artworkPending": false,
   "updatedAt": 1779889002.1195467,
   "error": ""
 }
@@ -43,9 +44,10 @@ ignore unknown fields for forward compatibility.
 | `durationText` | string | Display-ready `M:SS` text for `duration`. |
 | `progress` | number | `position / duration`, clamped from `0` to `1`. |
 | `artworkFile` | string | Artwork filename inside `runtime/`, or empty when unavailable. |
-| `artworkVersion` | string | Cache-busting track key used by the overlay when loading artwork. |
+| `artworkVersion` | string | SHA-256 of the normalized static JPEG, or empty while artwork is unavailable. Changes only when image content changes. |
 | `artworkSource` | string | Artwork source such as `music`, `smtc`, or `itunes`. |
 | `artworkError` | string | Last artwork retrieval error. Empty when artwork was found or no lookup was attempted. |
+| `artworkPending` | boolean | Artwork lookup is pending. The overlay retains its visible cover until the lookup completes, avoiding placeholder flashes between tracks sharing artwork. Missing means false for compatibility. |
 | `updatedAt` | number | Unix timestamp written by the backend. |
 | `error` | string | Provider or metadata error. Empty when the provider has no diagnostic to report. |
 
@@ -54,4 +56,6 @@ ignore unknown fields for forward compatibility.
 - macOS uses Music.app through `osascript` / JXA and can directly export Music.app artwork.
 - Windows uses the OS media session API (SMTC) through the optional `winsdk` dependency.
 - Demo mode writes sample playback data and does not attempt artwork lookup.
+- Artwork is fetched asynchronously; metadata may arrive first with empty artwork fields.
+- Published images are static JPEGs up to 320px with content-based filenames. The cache retains up to 8 recent covers; files temporarily locked by Windows readers are retried for deletion on the next publication.
 - Missing metadata or artwork should be reported in `error` or `artworkError`; it should not stop the HTTP server.

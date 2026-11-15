@@ -45,6 +45,7 @@ def default_payload(state: str = "stopped", error: str = "") -> Payload:
         "artworkVersion": "",
         "artworkSource": "",
         "artworkError": "",
+        "artworkPending": False,
         "updatedAt": time.time(),
         "error": error,
     }
@@ -76,6 +77,7 @@ def build_payload(
         "artworkVersion": "",
         "artworkSource": "",
         "artworkError": "",
+        "artworkPending": False,
         "updatedAt": time.time(),
         "error": error,
     }
@@ -87,6 +89,5 @@ def make_track_key(data: Payload) -> str:
             str(data.get("title", "")),
             str(data.get("artist", "")),
             str(data.get("album", "")),
-            str(data.get("duration", 0)),
         ]
     )

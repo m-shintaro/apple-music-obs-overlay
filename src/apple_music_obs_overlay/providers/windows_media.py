@@ -39,7 +39,7 @@ class WindowsMediaProvider(BaseProvider):
         except Exception as exc:
             return default_payload("error", f"windows:{_error_detail(exc)}")
 
-    def get_artwork(self, data: Dict[str, Any]) -> ArtworkResult:
+    def get_artwork(self, data: Dict[str, Any], runtime_dir: Path | None = None) -> ArtworkResult:
         if platform.system() != "Windows":
             return ArtworkResult(error="windows:unsupported_platform")
 
@@ -57,7 +57,7 @@ class WindowsMediaProvider(BaseProvider):
         if error:
             return ArtworkResult(error=error)
 
-        artwork_file, write_error = write_runtime_image(image, self.runtime_dir, "cover_windows")
+        artwork_file, write_error = write_runtime_image(image, runtime_dir or self.runtime_dir, "cover_windows")
         if artwork_file:
             return ArtworkResult(file=artwork_file, source=source, error="")
         return ArtworkResult(error=f"windows:thumbnail:{write_error}")

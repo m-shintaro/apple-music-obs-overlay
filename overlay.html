@@ -75,9 +75,9 @@
     position: relative;
     width: 720px;
     border-radius: var(--radius-card);
-    filter:
-      drop-shadow(0 30px 38px rgba(0,0,0,0.42))
-      drop-shadow(0 12px 18px rgba(0,0,0,0.26));
+    box-shadow:
+      0 30px 38px rgba(0,0,0,0.42),
+      0 12px 18px rgba(0,0,0,0.26);
     opacity: 0;
     transform: translateY(14px) scale(0.985);
     animation: rise 0.7s cubic-bezier(0.22,0.61,0.36,1) forwards;
@@ -206,6 +206,7 @@
   .eq i:nth-child(2) { height: 90%; animation-delay: -0.3s; }
   .eq i:nth-child(3) { height: 60%; animation-delay: -0.9s; }
   .eq i:nth-child(4) { height: 75%; animation-delay: 0s; }
+  .eq.paused i { animation-play-state: paused; }
 
   .title {
     font-size: 32px;
@@ -277,10 +278,12 @@
   .bar .filled {
     position: absolute;
     inset: 0 auto 0 0;
-    width: 13.5%;
+    width: 100%;
+    transform: scaleX(0.135);
+    transform-origin: left center;
     background: var(--fill);
     border-radius: 3px;
-    transition: width 0.25s linear;
+    transition: transform 0.1s linear;
   }
 
   @keyframes rise {
@@ -376,13 +379,15 @@ const NowPlaying = (() => {
 
   let currentKey = null;
   let currentArt = "";
-  let artLoadToken = 0;
-  const loadedArtUrls = new Set([fallbackArt]);
+  let pendingArt = null;
+  let failedArt = "";
+  let retryArtAt = 0;
+  let layerCleanupTimer = null;
   let progressState = "stopped";
   let progressBaseCurrent = 0;
   let progressDuration = 0;
   let progressBaseAt = performance.now();
-  let progressFrame = null;
+  let progressTimer = null;
   let lastProgressInput = null;
   let swapTimer = null;
   let cleanupTimer = null;
@@ -406,46 +411,17 @@ const NowPlaying = (() => {
     idxRef.i = next;
   }
 
-  function preloadArt(art) {
-    const normalizedArt = normalizeArt(art);
-    if (loadedArtUrls.has(normalizedArt)) {
-      return Promise.resolve(normalizedArt);
-    }
-
-    return new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        loadedArtUrls.add(normalizedArt);
-        resolve(normalizedArt);
-      };
-      img.onerror = () => resolve("");
-      img.src = normalizedArt;
-    });
-  }
-
-  function artResourceKey(art) {
-    const normalizedArt = normalizeArt(art);
-
-    try {
-      const url = new URL(normalizedArt, window.location.href);
-      if (url.pathname.startsWith("/runtime/")) {
-        return url.origin + url.pathname;
-      }
-    } catch (error) {
-      // Keep the raw value for non-URL artwork sources such as data URLs.
-    }
-
-    return normalizedArt;
-  }
-
-  function isSameArtResource(nextArt, activeArt) {
-    return artResourceKey(nextArt) === artResourceKey(activeArt);
-  }
-
   function commitArt(art, animate) {
+    clearTimeout(layerCleanupTimer);
     setLayer(artLayers, artRef, art, animate);
     setLayer(ambientLayers, ambientRef, art, animate);
     currentArt = art;
+    const clearInactiveLayers = () => {
+      artLayers[1 - artRef.i].style.backgroundImage = "";
+      ambientLayers[1 - ambientRef.i].style.backgroundImage = "";
+    };
+    if (animate) layerCleanupTimer = setTimeout(clearInactiveLayers, 900);
+    else clearInactiveLayers();
   }
 
   function currentProgressTime(now = performance.now()) {
@@ -462,24 +438,27 @@ const NowPlaying = (() => {
       ? Math.max(0, Math.min(100, (displayCurrent / safeDuration) * 100))
       : 0;
 
-    filled.style.width = pct + "%";
-    $("cur").textContent = fmt(displayCurrent);
-    $("dur").textContent = fmt(safeDuration);
+    const transform = `scaleX(${pct / 100})`;
+    if (filled.style.transform !== transform) filled.style.transform = transform;
+    const currentText = fmt(displayCurrent);
+    const durationText = fmt(safeDuration);
+    if ($("cur").textContent !== currentText) $("cur").textContent = currentText;
+    if ($("dur").textContent !== durationText) $("dur").textContent = durationText;
   }
 
   function stopProgressClock() {
-    if (progressFrame != null) {
-      cancelAnimationFrame(progressFrame);
-      progressFrame = null;
+    if (progressTimer != null) {
+      clearTimeout(progressTimer);
+      progressTimer = null;
     }
   }
 
   function tickProgress() {
-    progressFrame = null;
+    progressTimer = null;
     renderProgress(currentProgressTime(), progressDuration);
 
     if (progressState === "playing" && (progressDuration <= 0 || currentProgressTime() < progressDuration)) {
-      progressFrame = requestAnimationFrame(tickProgress);
+      progressTimer = setTimeout(tickProgress, 100);
     }
   }
 
@@ -506,6 +485,7 @@ const NowPlaying = (() => {
     const nextCurrent = keepLocalClock ? currentProgressTime(now) : incomingCurrent;
 
     progressState = nextState;
+    $("eq").classList.toggle("paused", nextState !== "playing");
     progressDuration = nextDuration;
     progressBaseCurrent = nextDuration > 0 ? Math.min(nextCurrent, nextDuration) : nextCurrent;
     progressBaseAt = now;
@@ -527,10 +507,9 @@ const NowPlaying = (() => {
       filled.style.transition = "";
     }
 
-    stopProgressClock();
     if (progressState === "playing" && (progressDuration <= 0 || progressBaseCurrent < progressDuration)) {
-      progressFrame = requestAnimationFrame(tickProgress);
-    }
+      if (progressTimer == null) progressTimer = setTimeout(tickProgress, 100);
+    } else stopProgressClock();
   }
 
   function snapProgress(current, duration, state) {
@@ -549,24 +528,49 @@ const NowPlaying = (() => {
 
   function setArt(art, animate) {
     const nextArt = normalizeArt(art);
-
+    if (pendingArt?.url === nextArt) return;
+    // Cancel a superseded load even when returning to the already visible cover.
+    if (pendingArt) pendingArt.cancel();
     if (nextArt === currentArt) return;
+    if (nextArt === failedArt && performance.now() < retryArtAt) return;
+    if (nextArt === fallbackArt) {
+      commitArt(nextArt, animate);
+      return;
+    }
     if (!currentArt && nextArt !== fallbackArt) {
       commitArt(fallbackArt, false);
     }
 
-    const token = ++artLoadToken;
-    preloadArt(nextArt).then(loadedArt => {
-      if (token !== artLoadToken) return;
-      if (!loadedArt || loadedArt === currentArt) return;
-      commitArt(loadedArt, animate);
-    });
+    const img = new Image();
+    let timeout;
+    const load = { url: nextArt, cancel: () => finish(false, true) };
+    const finish = (success, cancelled = false) => {
+      if (pendingArt !== load) return;
+      pendingArt = null;
+      clearTimeout(timeout);
+      img.onload = img.onerror = null;
+      if (!success) img.removeAttribute("src");
+      if (cancelled) return;
+      if (success) {
+        failedArt = "";
+        commitArt(nextArt, animate);
+      } else {
+        failedArt = nextArt;
+        retryArtAt = performance.now() + 5000;
+      }
+    };
+    pendingArt = load;
+    img.onload = () => finish(true);
+    img.onerror = () => finish(false);
+    timeout = setTimeout(() => finish(false), 5000);
+    img.src = nextArt;
   }
 
   function setDirect(d) {
     if (d.title != null) title.textContent = d.title;
     meta.textContent = metaText(d);
     if (d.art != null) setArt(d.art, false);
+    else if (!currentArt) commitArt(fallbackArt, false);
     snapProgress(d.current, d.duration, d.state);
   }
 
@@ -576,6 +580,7 @@ const NowPlaying = (() => {
     card.classList.remove("intro");
 
     if (d.art != null) setArt(d.art, true);
+    else if (pendingArt) pendingArt.cancel();
 
     title.classList.remove("swap-in", "swap-out");
     meta.classList.remove("swap-in", "swap-out");
@@ -584,10 +589,11 @@ const NowPlaying = (() => {
     meta.classList.add("swap-out");
 
     const nextMeta = metaText(d);
+    // Sync once now. The text animation must not later restore an old position/state.
+    snapProgress(d.current, d.duration, d.state);
     swapTimer = setTimeout(() => {
       if (d.title != null) title.textContent = d.title;
       meta.textContent = nextMeta;
-      snapProgress(d.current, d.duration, d.state);
 
       title.classList.remove("swap-out");
       meta.classList.remove("swap-out");
@@ -611,6 +617,14 @@ const NowPlaying = (() => {
         d.art != null;
 
       if (!hasTrackInfo) {
+        if (d.state === "stopped" || d.state === "error") {
+          clearTimeout(swapTimer);
+          clearTimeout(cleanupTimer);
+          title.classList.remove("swap-in", "swap-out");
+          meta.classList.remove("swap-in", "swap-out");
+          currentKey = null;
+          if (pendingArt) pendingArt.cancel();
+        }
         syncProgress(d.current, d.duration, d.state);
         return;
       }
@@ -628,9 +642,7 @@ const NowPlaying = (() => {
         return;
       }
 
-      if (d.art && !isSameArtResource(d.art, currentArt)) {
-        setArt(d.art, false);
-      }
+      if (d.art != null) setArt(d.art, true);
       syncProgress(d.current, d.duration, d.state);
     }
   };
@@ -652,12 +664,18 @@ function isPlayableData(data) {
   );
 }
 
+let runtimeRequest = null;
 async function updateFromRuntime() {
+  if (runtimeRequest) return;
+  const controller = new AbortController();
+  runtimeRequest = controller;
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch("/runtime/nowplaying.json?ts=" + Date.now(), { cache: "no-store" });
+    const res = await fetch("/runtime/nowplaying.json", { cache: "no-store", signal: controller.signal });
     if (!res.ok) return;
 
     const data = await res.json();
+    if (controller.signal.aborted) return;
     if (!isPlayableData(data)) {
       NowPlaying.update({ state: data?.state || "stopped" });
       return;
@@ -671,18 +689,26 @@ async function updateFromRuntime() {
       title: displayTitle,
       artist: hasTitle ? data.artist : "",
       album: hasTitle ? data.album : "",
-      art: artworkUrl(data.artworkFile, data.artworkVersion),
+      // Keep the visible cover during lookup; sharing an album must not flash
+      // the placeholder and reload the very same image on every track change.
+      art: data.artworkPending ? undefined : artworkUrl(data.artworkFile, data.artworkVersion),
       current: data.position,
       duration: data.duration,
       state: data.state,
     });
   } catch (error) {
     // Keep the last visible frame if polling fails briefly.
+  } finally {
+    clearTimeout(timeout);
+    runtimeRequest = null;
   }
 }
 
-updateFromRuntime();
-setInterval(updateFromRuntime, 250);
+async function pollRuntime() {
+  await updateFromRuntime();
+  setTimeout(pollRuntime, 250);
+}
+pollRuntime();
 </script>
 </body>
 </html>

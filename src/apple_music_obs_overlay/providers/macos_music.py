@@ -218,14 +218,14 @@ class MacOSMusicProvider(BaseProvider):
             safe_float(payload.get("duration") or 0),
         )
 
-    def get_artwork(self, data: Dict[str, Any]) -> ArtworkResult:
-        artwork_file, status = self._export_artwork_from_music()
+    def get_artwork(self, data: Dict[str, Any], runtime_dir: Path | None = None) -> ArtworkResult:
+        artwork_file, status = self._export_artwork_from_music(runtime_dir or self.runtime_dir)
         if artwork_file:
             return ArtworkResult(file=artwork_file, source="music", error="")
         return ArtworkResult(error=status)
 
-    def _export_artwork_from_music(self) -> Tuple[str, str]:
-        raw_path = self.runtime_dir / "cover_direct.raw"
+    def _export_artwork_from_music(self, runtime_dir: Path) -> Tuple[str, str]:
+        raw_path = runtime_dir / "cover_direct.raw"
         raw_path.unlink(missing_ok=True)
 
         try:
@@ -250,7 +250,7 @@ class MacOSMusicProvider(BaseProvider):
         if not raw_path.exists():
             return "", f"{status}:no_file_written"
 
-        artwork_file, error = convert_artwork_file(raw_path, self.runtime_dir, "cover_direct")
+        artwork_file, error = convert_artwork_file(raw_path, runtime_dir, "cover_direct")
         if artwork_file:
             return artwork_file, status
         return "", f"{status}:{error}"

@@ -3,9 +3,10 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
-from .artwork.itunes import fetch_artwork_from_itunes_search
+from .artwork.worker import ArtworkWorker
+from .artwork.cache import ArtworkCache
 from .output import write_outputs
 from .payload import default_payload, make_track_key
 from .providers.base import NowPlayingProvider
@@ -23,104 +24,57 @@ def poll_loop(
     country: str,
     allow_network_artwork: bool,
 ) -> None:
+    worker = ArtworkWorker(provider, country)
+    cache = ArtworkCache(runtime_dir)
+    generation = 0
     last_track_key = ""
-    last_artwork_file = ""
-    last_artwork_source = ""
-    last_artwork_error = ""
-    last_artwork_attempt_at = 0.0
-    last_network_artwork_key = ""
-    last_provider_artwork_found = False
+    artwork_file = artwork_version = artwork_source = artwork_error = ""
+    last_attempt_at = None
+    network_attempted = False
+    provider_found = False
     is_demo = isinstance(provider, DemoProvider)
 
     while not stop_event.is_set():
         data = _safe_nowplaying(provider)
+        playable = data.get("state") in ("playing", "paused")
+        track_key = make_track_key(data) if playable else ""
+        if track_key != last_track_key:
+            generation += 1
+            last_track_key = track_key
+            artwork_file = artwork_version = artwork_source = artwork_error = ""
+            last_attempt_at = None
+            network_attempted = provider_found = False
 
-        if data.get("state") in ("playing", "paused"):
-            track_key = make_track_key(data)
-            track_changed = track_key != last_track_key
-            now = time.monotonic()
-            should_retry_artwork = (
-                not track_changed
-                and not is_demo
-                and not last_provider_artwork_found
-                and now - last_artwork_attempt_at >= ARTWORK_RETRY_INTERVAL
-            )
+        result = worker.take_result()
+        if result is not None and result.generation == generation and playable:
+            # Retry five seconds after completion, not after the start of a slow job.
+            last_attempt_at = time.monotonic()
+            if result.image:
+                try:
+                    artwork_file, artwork_version = cache.publish(result.image)
+                    artwork_source, artwork_error = result.source, ""
+                    provider_found = result.provider_found
+                except OSError as exc:
+                    artwork_error = f"artwork:publish:{exc}"
+            elif not artwork_file:
+                artwork_error = result.error
 
-            if track_changed:
-                last_artwork_file = ""
-                last_artwork_source = ""
-                last_artwork_error = ""
-                last_artwork_attempt_at = 0.0
-                last_network_artwork_key = ""
-                last_provider_artwork_found = False
-                last_track_key = track_key
+        if playable:
+            data.update(artworkFile=artwork_file, artworkVersion=artwork_version,
+                        artworkSource=artwork_source, artworkError=artwork_error,
+                        artworkPending=not is_demo and (last_attempt_at is None or worker.busy))
 
-            if track_changed or should_retry_artwork:
-                last_artwork_attempt_at = now
-                artwork_file, artwork_source, artwork_error = _resolve_provider_artwork(
-                    provider,
-                    data,
-                    is_demo,
-                )
-
-                if artwork_file:
-                    last_provider_artwork_found = True
-                    last_artwork_file = artwork_file
-                    last_artwork_source = artwork_source
-                    last_artwork_error = ""
-                elif not last_artwork_file:
-                    last_artwork_error = artwork_error
-
-                if (
-                    not last_artwork_file
-                    and allow_network_artwork
-                    and not is_demo
-                    and last_network_artwork_key != track_key
-                ):
-                    last_network_artwork_key = track_key
-                    fallback_file, fallback_error = fetch_artwork_from_itunes_search(
-                        data,
-                        runtime_dir,
-                        country,
-                    )
-                    if fallback_file:
-                        last_artwork_file = fallback_file
-                        last_artwork_source = "itunes"
-                        last_artwork_error = ""
-                    elif not last_artwork_error:
-                        last_artwork_error = fallback_error
-
-            data["artworkFile"] = last_artwork_file
-            data["artworkVersion"] = last_track_key
-            data["artworkSource"] = last_artwork_source
-            data["artworkError"] = last_artwork_error
-        else:
-            last_track_key = ""
-            last_artwork_file = ""
-            last_artwork_source = ""
-            last_artwork_error = ""
-            last_artwork_attempt_at = 0.0
-            last_network_artwork_key = ""
-            last_provider_artwork_found = False
-
+        # Metadata keeps moving while the single artwork worker is busy.
         _safe_write_outputs(data, runtime_dir)
+        now = time.monotonic()
+        if (not stop_event.is_set() and playable and not is_demo and not worker.busy and
+                (last_attempt_at is None or
+                 (not provider_found and now - last_attempt_at >= ARTWORK_RETRY_INTERVAL))):
+            network = allow_network_artwork and not network_attempted
+            network_attempted = network_attempted or network
+            last_attempt_at = now
+            worker.start(generation, data, network)
         stop_event.wait(interval)
-
-
-def _resolve_provider_artwork(
-    provider: NowPlayingProvider,
-    data: Dict[str, Any],
-    is_demo: bool,
-) -> Tuple[str, str, str]:
-    if is_demo:
-        return "", "", ""
-
-    try:
-        artwork = provider.get_artwork(data)
-        return artwork.file, artwork.source, artwork.error
-    except Exception as exc:
-        detail = str(exc).strip() or exc.__class__.__name__
-        return "", "", f"{provider.name}:artwork:{detail}"
 
 
 def _safe_nowplaying(provider: NowPlayingProvider) -> Dict[str, Any]:

@@ -1,10 +1,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from io import BytesIO
 import subprocess
 from typing import Tuple
 
 from ..output import atomic_write_bytes
+
+from PIL import Image, ImageOps
+
+
+# Covers render at 104px, up to 312px at the maximum supported scale.
+MAX_ARTWORK_SIZE = 320
+
+
+def normalize_artwork(data: bytes) -> bytes:
+    """Return a bounded, static JPEG; never retain animated or full-size covers."""
+    with Image.open(BytesIO(data)) as image:
+        image.seek(0)
+        image = ImageOps.exif_transpose(image)
+        image.thumbnail((MAX_ARTWORK_SIZE, MAX_ARTWORK_SIZE), Image.Resampling.LANCZOS)
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (22, 22, 24))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        out = BytesIO()
+        background.save(out, "JPEG", quality=85)
+        return out.getvalue()
 
 
 SUPPORTED_DIRECT_SUFFIXES = {".jpg", ".png", ".gif", ".webp"}
